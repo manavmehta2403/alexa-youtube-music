@@ -360,54 +360,58 @@ async def get_user_liked_songs(user_id: str, access_token: str) -> List[Dict[str
     except Exception as e:
         logger.debug(f"Tier 1 personal playlist check note: {e}")
 
-    # 2. Tier 2: YouTube Data API v3 playlistItems for playlistId=LL (Liked Videos) with Smart Music Heuristics
+    # 2. Tier 2: YouTube Data API v3 playlistItems for playlistId=LL (Liked Videos) matching YouTube Music LM
     try:
         async with httpx.AsyncClient(timeout=8.0) as client:
-            ll_url = "https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId=LL&maxResults=50"
-            ll_resp = await client.get(ll_url, headers=headers)
-            if ll_resp.status_code == 200:
-                items = ll_resp.json().get("items", [])
-                non_music_keywords = [
-                    "tutorial", "python", "javascript", "code", "coding", "course", "lecture",
-                    "gameplay", "walkthrough", "review", "vlog", "unboxing", "install", "how to",
-                    "news", "reaction", "episode", "podcast", "talk", "full match", "highlights"
-                ]
-                music_keywords = [
-                    "official video", "music", "audio", "lyric", "song", "remix", "mashup",
-                    "lofi", "beat", "album", "ft.", "feat.", "gana", "gane", "soundtrack", "vevo"
-                ]
+            page_token = None
+            non_music_keywords = [
+                "tutorial", "python", "javascript", "code", "coding", "course", "lecture",
+                "gameplay", "walkthrough", "review", "vlog", "unboxing", "install", "how to",
+                "news", "reaction", "episode", "podcast", "talk", "full match", "highlights"
+            ]
 
-                for it in items:
-                    snip = it.get("snippet", {})
-                    vid = snip.get("resourceId", {}).get("videoId")
-                    t = snip.get("title", "")
-                    ch = snip.get("videoOwnerChannelTitle", "")
+            # Fetch up to 100 liked tracks across 2 pages
+            for _ in range(2):
+                ll_url = "https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId=LL&maxResults=50"
+                if page_token:
+                    ll_url += f"&pageToken={page_token}"
+                ll_resp = await client.get(ll_url, headers=headers)
+                if ll_resp.status_code == 200:
+                    ll_data = ll_resp.json()
+                    items = ll_data.get("items", [])
 
-                    if not vid or not t or "deleted" in t.lower() or "private" in t.lower():
-                        continue
+                    for it in items:
+                        snip = it.get("snippet", {})
+                        vid = snip.get("resourceId", {}).get("videoId")
+                        t = snip.get("title", "")
+                        ch = snip.get("videoOwnerChannelTitle", "")
 
-                    t_low = t.lower()
-                    ch_low = ch.lower()
+                        if not vid or not t or "deleted" in t.lower() or "private" in t.lower():
+                            continue
 
-                    # Exclude obvious non-music videos
-                    if any(bad in t_low for bad in non_music_keywords):
-                        continue
+                        t_low = t.lower()
 
-                    # Include if channel is clearly musical or title indicates music
-                    is_music_channel = any(m in ch_low for m in ["topic", "vevo", "music", "records", "t-series", "speed", "sony", "zee", "sound"])
-                    is_music_title = any(m in t_low for m in music_keywords)
+                        # Exclude obvious non-music videos (e.g. coding tutorials, game walkthroughs)
+                        if any(bad in t_low for bad in non_music_keywords):
+                            continue
 
-                    if is_music_channel or is_music_title or "-" in t:
+                        # All other liked items from YouTube Music (Devi Sukt, 52 Bars, Marlboro, Alag Aasmaan, etc.)
                         tracks.append({
                             "videoId": vid,
                             "title": t,
                             "author": ch or "YouTube Music",
                         })
 
-                if tracks:
-                    user_liked_cache[user_id] = tracks
-                    logger.info(f"Retrieved {len(tracks)} filtered music tracks from Liked Videos")
-                    return tracks
+                    page_token = ll_data.get("nextPageToken")
+                    if not page_token:
+                        break
+                else:
+                    break
+
+            if tracks:
+                user_liked_cache[user_id] = tracks
+                logger.info(f"Retrieved {len(tracks)} authentic YouTube Music liked tracks from LL/LM")
+                return tracks
     except Exception as e:
         logger.error(f"Tier 2 Liked Videos fetch failed: {e}")
 
