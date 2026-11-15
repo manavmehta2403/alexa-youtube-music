@@ -352,7 +352,7 @@ async def alexa_webhook(request: Request):
     if req_type == "LaunchRequest":
         status_msg = "Google account linked." if access_token else "Boliye kaunsa gaana sunna hai? (What song would you like to hear?)"
         return build_alexa_speech_response(
-            f"YouTube is ready. {status_msg}",
+            f"YouTube Music is ready. {status_msg}",
             end_session=False,
         )
 
@@ -416,7 +416,7 @@ async def alexa_webhook(request: Request):
                 title=first_track["title"],
                 author=first_track["author"],
                 base_url=base_url,
-                speech_text=f"Playing your liked songs{mode_text} on YouTube.",
+                speech_text=f"Playing your liked songs{mode_text} on YouTube Music.",
             )
 
         # Play Playlist ("play my punjabi playlist", "playlist lofi bajao")
@@ -450,7 +450,7 @@ async def alexa_webhook(request: Request):
                         title=first_track["title"],
                         author=first_track["author"],
                         base_url=base_url,
-                        speech_text=f"Playing your playlist {playlist_name}{mode_text} on YouTube.",
+                        speech_text=f"Playing your playlist {playlist_name}{mode_text} on YouTube Music.",
                     )
 
             # Public search for the playlist / mix (e.g. "punjabi playlist")
@@ -466,7 +466,7 @@ async def alexa_webhook(request: Request):
                 title=result["title"],
                 author=result["author"],
                 base_url=base_url,
-                speech_text=f"Playing {result['title']} on YouTube.",
+                speech_text=f"Playing {result['title']} on YouTube Music.",
             )
 
         # General Music Search ("jagjit singh ke ganne lagao", "play Starboy", "arijit singh bajao")
@@ -481,7 +481,7 @@ async def alexa_webhook(request: Request):
 
             result = await search_youtube(query)
             if not result:
-                return build_alexa_speech_response(f"Sorry, {query} YouTube par nahi mila.")
+                return build_alexa_speech_response(f"Sorry, {query} YouTube Music par nahi mila.")
 
             video_id = result["videoId"]
             title = result["title"]
@@ -494,7 +494,7 @@ async def alexa_webhook(request: Request):
                 title=title,
                 author=author,
                 base_url=base_url,
-                speech_text=f"Playing {title} on YouTube.",
+                speech_text=f"Playing {title} on YouTube Music.",
             )
 
         # Pause / Stop

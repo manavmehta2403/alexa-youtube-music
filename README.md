@@ -19,27 +19,27 @@ Supports **English & Hindi/Hinglish commands**, **Shuffle & Repeat modes**, **pu
 ## 🗣️ Voice Commands (English & Hindi)
 
 ### 🔀 Shuffle & Repeat Commands
-* *"Alexa, ask YouTube to play my liked songs on shuffle"*
-* *"Alexa, ask YouTube to play my liked songs on repeat"*
-* *"Alexa, ask YouTube to shuffle my Punjabi playlist"*
+* *"Alexa, ask YouTube Music to play my liked songs on shuffle"*
+* *"Alexa, ask YouTube Music to play my liked songs on repeat"*
+* *"Alexa, ask YouTube Music to shuffle my Punjabi playlist"*
 * *"Alexa, shuffle"* / *"Alexa, repeat"*
 
 ### 🇮🇳 Hindi / Hinglish Commands
-* *"Alexa, ask YouTube Jagjit Singh ke ganne lagao"*
-* *"Alexa, ask YouTube Arijit Singh ke gaane sunao"*
-* *"Alexa, ask YouTube Punjabi playlist bajao"*
-* *"Alexa, ask YouTube mere liked gane bajao"*
-* *"Alexa, ask YouTube mere pasandida gane shuffle par lagao"*
-* *"Alexa, ask YouTube shuru se lagao"* / *"Alexa, band karo"*
+* *"Alexa, ask YouTube Music Jagjit Singh ke ganne lagao"*
+* *"Alexa, ask YouTube Music Arijit Singh ke gaane sunao"*
+* *"Alexa, ask YouTube Music Punjabi playlist bajao"*
+* *"Alexa, ask YouTube Music mere liked gane bajao"*
+* *"Alexa, ask YouTube Music mere pasandida gane shuffle par lagao"*
+* *"Alexa, ask YouTube Music shuru se lagao"* / *"Alexa, band karo"*
 
 ### 🇬🇧 English Commands
-* *"Alexa, ask YouTube to play Starboy"*
-* *"Alexa, ask YouTube to play Believer by Imagine Dragons"*
-* *"Alexa, ask YouTube to play playlist Lofi Chill"*
-* *"Alexa, ask YouTube to play my liked songs"*
+* *"Alexa, ask YouTube Music to play Starboy"*
+* *"Alexa, ask YouTube Music to play Believer by Imagine Dragons"*
+* *"Alexa, ask YouTube Music to play playlist Lofi Chill"*
+* *"Alexa, ask YouTube Music to play my liked songs"*
 * *"Alexa, next"* / *"Alexa, previous"* / *"Alexa, pause"* / *"Alexa, resume"*
 
-*(Note: If you configured your invocation name as `youtube music`, say "ask YouTube Music to...". If set to `youtube`, say "ask YouTube to...")*
+*(Note: If you configured your invocation name as `youtube music`, say "ask YouTube Music to...". If set to `youtube`, say "ask YouTube Music to...")*
 
 ---
 
