@@ -1,18 +1,45 @@
-# 🎵 Alexa YouTube Music Bridge
+# 🎵 Alexa YouTube Bridge (Hindi, English, Shuffle & Repeat)
 
-An open-source, multi-cloud bridge that enables **Amazon Echo & Alexa** devices to search, stream, and play music directly from **YouTube Music**.
+An open-source, multi-cloud bridge that enables **Amazon Echo & Alexa** devices to search, stream, and play music directly from **YouTube & YouTube Music**.
 
-Supports **public music search**, **gapless continuous playback**, and **Google Account Linking (OAuth 2.0)** so each user can access their personal **Liked Songs**, **private playlists**, and **personal library**.
+Supports **English & Hindi/Hinglish commands**, **Shuffle & Repeat modes**, **public search**, and **Google Account Linking (OAuth 2.0)** so each user can access their personal **Liked Songs**, **Punjabi playlists**, and **personal library**.
 
 ---
 
-## 🌟 Features
-- **100% Free & Open Source:** Deployable to Render, Railway, Koyeb, Fly.io, or run locally.
-- **Multi-User Google Login:** Each user links their own Google account via the Alexa app to play their personal library.
-- **Liked Songs & Private Playlists:** Say *"Alexa, ask YouTube Music to play my liked songs"*.
-- **Anti-Bot Failover Pool:** Resolves streams through decentralized Invidious nodes without datacenter IP bans.
+## 🌟 Key Features
+- **Hindi, Punjabi & English Support:** Full support for Hinglish natural queries (*"Jagjit Singh ke ganne lagao"*, *"Punjabi playlist bajao"*).
+- **Shuffle & Repeat:** Say *"play my liked songs on shuffle"* or *"play on repeat"*.
+- **Multi-User Google Login:** Each user links their own Google account via the Alexa app to stream their personal library.
+- **Anti-Bot Failover Pool:** Resolves streams through decentralized Invidious nodes with 0 datacenter IP blocks.
 - **Continuous Autoplay:** Enqueues recommended tracks seamlessly via Alexa's `AudioPlayer.PlaybackNearlyFinished` protocol.
-- **Standard Controls:** Hardware buttons and voice commands work for Pause, Resume, Next, Previous, and Restart.
+- **Hardware & Voice Controls:** Play, Pause, Resume, Next, Previous, Repeat, and Volume controls.
+
+---
+
+## 🗣️ Voice Commands (English & Hindi)
+
+### 🔀 Shuffle & Repeat Commands
+* *"Alexa, ask YouTube to play my liked songs on shuffle"*
+* *"Alexa, ask YouTube to play my liked songs on repeat"*
+* *"Alexa, ask YouTube to shuffle my Punjabi playlist"*
+* *"Alexa, shuffle"* / *"Alexa, repeat"*
+
+### 🇮🇳 Hindi / Hinglish Commands
+* *"Alexa, ask YouTube Jagjit Singh ke ganne lagao"*
+* *"Alexa, ask YouTube Arijit Singh ke gaane sunao"*
+* *"Alexa, ask YouTube Punjabi playlist bajao"*
+* *"Alexa, ask YouTube mere liked gane bajao"*
+* *"Alexa, ask YouTube mere pasandida gane shuffle par lagao"*
+* *"Alexa, ask YouTube shuru se lagao"* / *"Alexa, band karo"*
+
+### 🇬🇧 English Commands
+* *"Alexa, ask YouTube to play Starboy"*
+* *"Alexa, ask YouTube to play Believer by Imagine Dragons"*
+* *"Alexa, ask YouTube to play playlist Lofi Chill"*
+* *"Alexa, ask YouTube to play my liked songs"*
+* *"Alexa, next"* / *"Alexa, previous"* / *"Alexa, pause"* / *"Alexa, resume"*
+
+*(Note: If you configured your invocation name as `youtube music`, say "ask YouTube Music to...". If set to `youtube`, say "ask YouTube to...")*
 
 ---
 
@@ -79,14 +106,11 @@ Google Account Linking allows Alexa to fetch your personal YouTube Music library
    - User Support Email: Your email
    - Under **Scopes**, click **Add or Remove Scopes** and add:
      - `https://www.googleapis.com/auth/youtube.readonly`
-     - `openid`
-     - `profile`
-     - `email`
+     - `openid`, `profile`, `email`
    - Under **Test Users**, add your personal Google email (and any family/friends' emails).
 4. Go to **APIs & Services** → **Credentials** → **Create Credentials** → **OAuth Client ID**:
    - Application Type: **Web Application**
    - Name: `Alexa Skill Client`
-   - Leave the redirect URIs open for now (we get them from Alexa in Step 2).
    - Click **Create**. Copy your **Client ID** and **Client Secret**.
 
 ---
@@ -104,35 +128,16 @@ Google Account Linking allows Alexa to fetch your personal YouTube Music library
    - **Client Authentication Scheme:** `Credentials in request body`
    - **Scope:** Add:
      - `https://www.googleapis.com/auth/youtube.readonly`
-     - `openid`
-     - `profile`
-     - `email`
-5. At the bottom of the Alexa Account Linking page, copy the **Alexa Redirect URLs**:
-   - `https://pitangui.amazon.com/api/run/skills/...`
-   - `https://layla.amazon.com/api/run/skills/...`
-   - `https://alexa.amazon.co.jp/api/run/skills/...`
-6. Return to your Google Cloud Console (from Step 1) → Edit your OAuth 2.0 Web Client → Paste all three Alexa Redirect URLs under **Authorized redirect URIs** → Click **Save**.
+     - `openid`, `profile`, `email`
+5. At the bottom of the Alexa Account Linking page, copy the **Alexa Redirect URLs** (e.g. `https://pitangui.amazon.com/api/run/skills/...`).
+6. Return to Google Cloud Console (from Step 1) → Edit your OAuth 2.0 Web Client → Paste the Alexa Redirect URLs under **Authorized redirect URIs** → Click **Save**.
 7. In the Alexa Developer Console, click **Save** (top right).
 
 ---
 
 ### Step 3: Link Account in Alexa App
-1. Open the **Amazon Alexa App** on your phone (or go to [alexa.amazon.com](https://alexa.amazon.com)).
+1. Open the **Amazon Alexa App** on your phone.
 2. Go to **More** → **Skills & Games** → **Your Skills** → **Dev**.
 3. Tap **YouTube Music** → Tap **Settings** → Tap **Link Account**.
 4. Sign in with your Google account and grant read access to YouTube.
 5. Your Google account is now linked!
-
----
-
-## 🗣️ Voice Commands
-
-| Action | What to say |
-| :--- | :--- |
-| **Play any song** | *"Alexa, ask YouTube Music to play Starboy"* |
-| **Play by artist** | *"Alexa, ask YouTube Music to play Coldplay"* |
-| **Play your Liked Songs** | *"Alexa, ask YouTube Music to play my liked songs"* |
-| **Play personal playlist** | *"Alexa, ask YouTube Music to play my playlist Chill Vibes"* |
-| **Pause / Resume** | *"Alexa, pause"* / *"Alexa, resume"* |
-| **Next / Previous** | *"Alexa, next"* / *"Alexa, previous"* |
-| **Restart track** | *"Alexa, restart"* |

@@ -1,7 +1,7 @@
 {
   "interactionModel": {
     "languageModel": {
-      "invocationName": "youtube music",
+      "invocationName": "youtube",
       "intents": [
         {
           "name": "AMAZON.CancelIntent",
@@ -12,15 +12,15 @@
           "samples": [
             "help",
             "what can i say",
-            "how do i use this"
+            "madad karo"
           ]
         },
         {
           "name": "AMAZON.StopIntent",
           "samples": [
             "stop",
-            "shut up",
-            "be quiet"
+            "band karo",
+            "roko"
           ]
         },
         {
@@ -44,16 +44,35 @@
           "samples": [
             "restart",
             "start over",
-            "restart song"
+            "shuru se lagao",
+            "dobara bajao"
           ]
         },
         {
           "name": "AMAZON.RepeatIntent",
           "samples": [
             "repeat",
-            "replay",
-            "play again"
+            "play on repeat",
+            "loop this",
+            "isey repeat par chalao",
+            "repeat par lagao"
           ]
+        },
+        {
+          "name": "AMAZON.ShuffleOnIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.ShuffleOffIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.LoopOnIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.LoopOffIntent",
+          "samples": []
         },
         {
           "name": "PlayMusicIntent",
@@ -71,7 +90,26 @@
             "listen to {query}",
             "play track {query}",
             "search for {query}",
-            "find {query}"
+            "find {query}",
+            "play {query} on shuffle",
+            "play {query} on repeat",
+            "shuffle {query}",
+            "{query} ke ganne lagao",
+            "{query} ke gaane lagao",
+            "{query} ke gane lagao",
+            "{query} ke gane bajao",
+            "{query} ke gaane sunao",
+            "{query} chalao",
+            "{query} bajao",
+            "{query} lagao",
+            "{query} sunao",
+            "{query} chala do",
+            "{query} laga do",
+            "{query} baja do",
+            "{query} ke gaane chala do",
+            "{query} ke gane chalao",
+            "gana lagao {query}",
+            "gaana bajao {query}"
           ]
         },
         {
@@ -87,7 +125,20 @@
             "play the playlist {playlist}",
             "start playlist {playlist}",
             "stream playlist {playlist}",
-            "play my playlist {playlist}"
+            "play my playlist {playlist}",
+            "play my {playlist} playlist",
+            "play {playlist} playlist on shuffle",
+            "play {playlist} playlist on repeat",
+            "shuffle my {playlist} playlist",
+            "playlist {playlist} lagao",
+            "{playlist} playlist chalao",
+            "{playlist} playlist bajao",
+            "meri {playlist} playlist lagao",
+            "meri {playlist} playlist chalao",
+            "meri {playlist} playlist bajao",
+            "{playlist} playlist laga do",
+            "{playlist} playlist chala do",
+            "playlist lagao {playlist}"
           ]
         },
         {
@@ -99,7 +150,21 @@
             "play my thumbs up",
             "play liked songs",
             "play my library",
-            "shuffle my liked songs"
+            "shuffle my liked songs",
+            "play my liked songs on shuffle",
+            "play my liked songs as shuffle",
+            "play my liked songs on repeat",
+            "play my liked songs in repeat",
+            "repeat my liked songs",
+            "loop my liked songs",
+            "mere liked songs bajao",
+            "mere liked gane bajao",
+            "mere pasandida gane lagao",
+            "mere pasandida gane sunao",
+            "mere liked songs chalao",
+            "mere pasandida gaane bajao",
+            "mere pasandida gane shuffle par lagao",
+            "mere liked songs repeat par bajao"
           ]
         }
       ],

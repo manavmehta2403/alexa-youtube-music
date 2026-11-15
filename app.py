@@ -1,4 +1,5 @@
 import logging
+import random
 import urllib.parse
 from typing import Any, Dict, List, Optional
 import httpx
@@ -8,7 +9,7 @@ from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("alexa-ytmusic")
 
-app = FastAPI(title="Alexa YouTube Music Bridge", version="2.0.0")
+app = FastAPI(title="Alexa YouTube Music Bridge", version="2.5.0")
 
 # Pool of reliable Invidious instances for public audio stream extraction
 INVIDIOUS_INSTANCES = [
@@ -24,6 +25,8 @@ INVIDIOUS_INSTANCES = [
 stream_cache: Dict[str, str] = {}
 # In-memory queue cache for next/previous navigation: token -> list of next songs
 related_cache: Dict[str, List[Dict[str, str]]] = {}
+# User playback modes: user_id -> {"shuffle": bool, "repeat": bool, "current_token": str}
+user_playback_modes: Dict[str, Dict[str, Any]] = {}
 
 
 async def fetch_with_failover(path: str, timeout: float = 6.0) -> Optional[Any]:
@@ -46,15 +49,18 @@ async def fetch_with_failover(path: str, timeout: float = 6.0) -> Optional[Any]:
 
 
 async def search_youtube(query: str) -> Optional[Dict[str, Any]]:
-    """Searches YouTube via Invidious instances."""
-    encoded_query = urllib.parse.quote_plus(query)
+    """Searches YouTube via Invidious instances (supports Hindi, English, Punjabi)."""
+    # Clean up common filler words in query if any
+    cleaned_query = query.strip()
+    encoded_query = urllib.parse.quote_plus(cleaned_query)
+
     data = await fetch_with_failover(f"/api/v1/search?q={encoded_query}&type=video")
     if data and isinstance(data, list) and len(data) > 0:
         top = data[0]
         return {
             "videoId": top.get("videoId"),
-            "title": top.get("title", query),
-            "author": top.get("author", "YouTube Music"),
+            "title": top.get("title", cleaned_query),
+            "author": top.get("author", "YouTube"),
         }
     return None
 
@@ -129,7 +135,7 @@ async def get_user_liked_songs(access_token: str) -> List[Dict[str, str]]:
                         tracks.append({
                             "videoId": vid,
                             "title": snippet.get("title", "Liked Song"),
-                            "author": snippet.get("videoOwnerChannelTitle", "YouTube Music"),
+                            "author": snippet.get("videoOwnerChannelTitle", "YouTube"),
                         })
                 return tracks
             else:
@@ -170,7 +176,7 @@ async def get_user_personal_playlist(access_token: str, playlist_name: str) -> L
                                 tracks.append({
                                     "videoId": vid,
                                     "title": snippet.get("title", "Track"),
-                                    "author": snippet.get("videoOwnerChannelTitle", "YouTube Music"),
+                                    "author": snippet.get("videoOwnerChannelTitle", "YouTube"),
                                 })
                         return tracks
     except Exception as e:
@@ -289,8 +295,8 @@ async def health_check():
     return {
         "status": "online",
         "service": "Alexa YouTube Music Bridge",
-        "version": "2.0.0",
-        "features": ["Public Search", "Google Account Linking (Multi-User)", "AudioPlayer Autoplay"],
+        "version": "2.5.0",
+        "features": ["Public Search", "Hindi/Hinglish/English", "Shuffle", "Repeat/Loop", "Google Account Linking (Multi-User)"],
         "instances_configured": len(INVIDIOUS_INSTANCES),
     }
 
@@ -330,16 +336,23 @@ async def alexa_webhook(request: Request):
     req_type = body.get("request", {}).get("type")
     base_url = str(request.base_url).rstrip("/")
 
-    # Extract OAuth accessToken if the user linked their Google account
+    # Extract user ID and OAuth accessToken
+    user_id = body.get("context", {}).get("System", {}).get("user", {}).get("userId", "default_user")
     access_token = body.get("context", {}).get("System", {}).get("user", {}).get("accessToken")
 
-    logger.info(f"Received Alexa request: type={req_type}, user_authenticated={bool(access_token)}")
+    # Initialize user state if needed
+    if user_id not in user_playback_modes:
+        user_playback_modes[user_id] = {"shuffle": False, "repeat": False, "current_token": None}
+
+    user_state = user_playback_modes[user_id]
+
+    logger.info(f"Received Alexa request: type={req_type}, user={user_id[:12]}, authenticated={bool(access_token)}")
 
     # 1. Launch Request
     if req_type == "LaunchRequest":
-        status_msg = "Your Google account is linked." if access_token else "You can ask for any song, or link your Google account in the Alexa app."
+        status_msg = "Google account linked." if access_token else "Boliye kaunsa gaana sunna hai? (What song would you like to hear?)"
         return build_alexa_speech_response(
-            f"YouTube Music is ready. {status_msg} What would you like to hear?",
+            f"YouTube is ready. {status_msg}",
             end_session=False,
         )
 
@@ -349,75 +362,131 @@ async def alexa_webhook(request: Request):
         intent_name = intent.get("name")
         logger.info(f"Intent name: {intent_name}")
 
-        # Play User's Liked Songs ("play my liked songs", "play my favorites")
+        # Check for Shuffle On / Off intents
+        if intent_name == "AMAZON.ShuffleOnIntent":
+            user_state["shuffle"] = True
+            current_token = body.get("context", {}).get("AudioPlayer", {}).get("token")
+            if current_token and current_token in related_cache:
+                random.shuffle(related_cache[current_token])
+            return build_alexa_speech_response("Shuffle turned on.")
+
+        if intent_name == "AMAZON.ShuffleOffIntent":
+            user_state["shuffle"] = False
+            return build_alexa_speech_response("Shuffle turned off.")
+
+        # Check for Repeat / Loop intents
+        if intent_name in ("AMAZON.LoopOnIntent", "AMAZON.RepeatIntent"):
+            user_state["repeat"] = True
+            return build_alexa_speech_response("Repeat turned on.")
+
+        if intent_name == "AMAZON.LoopOffIntent":
+            user_state["repeat"] = False
+            return build_alexa_speech_response("Repeat turned off.")
+
+        # Play User's Liked Songs ("play my liked songs on shuffle", "mere liked gane bajao")
         if intent_name == "PlayLikedSongsIntent":
             if not access_token:
                 return build_alexa_link_account_response(
-                    "To play your liked songs and library, please link your Google account using the card sent to your Alexa app."
+                    "Apne liked gaane sunne ke liye, please link your Google account using the card sent to your Alexa app."
                 )
 
             liked_tracks = await get_user_liked_songs(access_token)
             if not liked_tracks:
-                return build_alexa_speech_response("I couldn't find any liked songs in your YouTube Music library.")
+                return build_alexa_speech_response("No liked songs found in your YouTube library.")
+
+            # Check if shuffle was requested
+            req_text = str(body).lower()
+            is_shuffle = "shuffle" in req_text or user_state["shuffle"]
+            is_repeat = "repeat" in req_text or "loop" in req_text or user_state["repeat"]
+
+            if is_repeat:
+                user_state["repeat"] = True
+
+            if is_shuffle:
+                user_state["shuffle"] = True
+                random.shuffle(liked_tracks)
 
             first_track = liked_tracks[0]
-            # Cache remaining tracks for next button / queue
+            user_state["current_token"] = first_track["videoId"]
             related_cache[first_track["videoId"]] = liked_tracks[1:]
 
+            mode_text = " on shuffle" if is_shuffle else (" on repeat" if is_repeat else "")
             return build_alexa_play_response(
                 video_id=first_track["videoId"],
                 title=first_track["title"],
                 author=first_track["author"],
                 base_url=base_url,
-                speech_text="Playing your liked songs from YouTube Music.",
+                speech_text=f"Playing your liked songs{mode_text} on YouTube.",
             )
 
-        # Play Playlist ("play playlist X", "play my playlist X")
+        # Play Playlist ("play my punjabi playlist", "playlist lofi bajao")
         if intent_name == "PlayPlaylistIntent":
-            playlist_name = intent.get("slots", {}).get("playlist", {}).get("value")
+            playlist_name = intent.get("slots", {}).get("playlist", {}).get("value", "")
             if not playlist_name:
-                return build_alexa_speech_response("What playlist do you want to play?", end_session=False)
+                return build_alexa_speech_response("Kaunsi playlist bajani hai? (What playlist do you want to play?)", end_session=False)
 
-            # If user has linked Google account, check personal playlists first
+            req_text = str(body).lower()
+            is_shuffle = "shuffle" in req_text or user_state["shuffle"]
+            is_repeat = "repeat" in req_text or "loop" in req_text or user_state["repeat"]
+
+            if is_repeat:
+                user_state["repeat"] = True
+
+            # Check user personal playlists first if account is linked
             if access_token:
                 personal_tracks = await get_user_personal_playlist(access_token, playlist_name)
                 if personal_tracks:
+                    if is_shuffle:
+                        user_state["shuffle"] = True
+                        random.shuffle(personal_tracks)
+
                     first_track = personal_tracks[0]
+                    user_state["current_token"] = first_track["videoId"]
                     related_cache[first_track["videoId"]] = personal_tracks[1:]
+
+                    mode_text = " on shuffle" if is_shuffle else ""
                     return build_alexa_play_response(
                         video_id=first_track["videoId"],
                         title=first_track["title"],
                         author=first_track["author"],
                         base_url=base_url,
-                        speech_text=f"Playing your playlist {playlist_name}.",
+                        speech_text=f"Playing your playlist {playlist_name}{mode_text} on YouTube.",
                     )
 
-            # Fallback to public search for the playlist / mix
-            result = await search_youtube(f"{playlist_name} playlist")
+            # Public search for the playlist / mix (e.g. "punjabi playlist")
+            search_query = f"{playlist_name} playlist" if "playlist" not in playlist_name.lower() else playlist_name
+            result = await search_youtube(search_query)
             if not result:
-                return build_alexa_speech_response(f"Sorry, I couldn't find a playlist for {playlist_name}.")
+                return build_alexa_speech_response(f"Sorry, {playlist_name} playlist nahi mili.")
 
+            video_id = result["videoId"]
+            user_state["current_token"] = video_id
             return build_alexa_play_response(
-                video_id=result["videoId"],
+                video_id=video_id,
                 title=result["title"],
                 author=result["author"],
                 base_url=base_url,
-                speech_text=f"Playing {result['title']}.",
+                speech_text=f"Playing {result['title']} on YouTube.",
             )
 
-        # General Music Search ("play Starboy", "play Coldplay")
+        # General Music Search ("jagjit singh ke ganne lagao", "play Starboy", "arijit singh bajao")
         if intent_name == "PlayMusicIntent":
             query = intent.get("slots", {}).get("query", {}).get("value")
             if not query:
-                return build_alexa_speech_response("What song do you want to play?", end_session=False)
+                return build_alexa_speech_response("Kaunsa gaana lagau? (What song should I play?)", end_session=False)
+
+            req_text = str(body).lower()
+            if "repeat" in req_text or "loop" in req_text:
+                user_state["repeat"] = True
 
             result = await search_youtube(query)
             if not result:
-                return build_alexa_speech_response(f"Sorry, I couldn't find {query} on YouTube Music.")
+                return build_alexa_speech_response(f"Sorry, {query} YouTube par nahi mila.")
 
             video_id = result["videoId"]
             title = result["title"]
             author = result["author"]
+            user_state["current_token"] = video_id
 
             logger.info(f"Starting playback for: {title} ({video_id})")
             return build_alexa_play_response(
@@ -425,7 +494,7 @@ async def alexa_webhook(request: Request):
                 title=title,
                 author=author,
                 base_url=base_url,
-                speech_text=f"Playing {title} on YouTube Music.",
+                speech_text=f"Playing {title} on YouTube.",
             )
 
         # Pause / Stop
@@ -441,20 +510,25 @@ async def alexa_webhook(request: Request):
                 return build_alexa_play_response(
                     video_id=token,
                     title="Resuming",
-                    author="YouTube Music",
+                    author="YouTube",
                     base_url=base_url,
                     offset=offset,
                 )
-            return build_alexa_speech_response("Nothing is currently paused to resume.")
+            return build_alexa_speech_response("Kuch pause nahi hai resume karne ke liye.")
 
         # Next Track (Autoplay skip)
         if intent_name == "AMAZON.NextIntent":
             current_token = body.get("context", {}).get("AudioPlayer", {}).get("token")
             related = related_cache.get(current_token, [])
             if related:
-                next_song = related.pop(0)
-                # Keep remaining queue for subsequent skips
+                if user_state["shuffle"]:
+                    next_song = related.pop(random.randint(0, len(related) - 1))
+                else:
+                    next_song = related.pop(0)
+
                 related_cache[next_song["videoId"]] = related
+                user_state["current_token"] = next_song["videoId"]
+
                 return build_alexa_play_response(
                     video_id=next_song["videoId"],
                     title=next_song["title"],
@@ -465,13 +539,13 @@ async def alexa_webhook(request: Request):
             return build_alexa_speech_response("No more tracks in the current queue.")
 
         # Previous / Start Over
-        if intent_name in ("AMAZON.PreviousIntent", "AMAZON.StartOverIntent", "AMAZON.RepeatIntent"):
+        if intent_name in ("AMAZON.PreviousIntent", "AMAZON.StartOverIntent"):
             current_token = body.get("context", {}).get("AudioPlayer", {}).get("token")
             if current_token:
                 return build_alexa_play_response(
                     video_id=current_token,
                     title="Restarting",
-                    author="YouTube Music",
+                    author="YouTube",
                     base_url=base_url,
                     offset=0,
                 )
@@ -480,13 +554,27 @@ async def alexa_webhook(request: Request):
         # Help
         if intent_name == "AMAZON.HelpIntent":
             return build_alexa_speech_response(
-                "You can say, play Starboy by The Weeknd, play my liked songs, play playlist Chill, or say next, previous, or pause. What would you like to hear?",
+                "Aap bol sakte hain: Jagjit Singh ke gane lagao, play my liked songs on shuffle, play my punjabi playlist, ya next aur pause. Kaunsa gaana sunna hai?",
                 end_session=False,
             )
 
-    # 3. AudioPlayer Queueing (Gapless Continuous Playback)
+    # 3. AudioPlayer Queueing (Gapless Continuous Playback & Repeat support)
     if req_type == "AudioPlayer.PlaybackNearlyFinished":
         current_token = body.get("request", {}).get("token")
+
+        # If Repeat is active, re-enqueue the same track!
+        if user_state.get("repeat") and current_token:
+            logger.info(f"Repeat is active: Re-enqueuing current song ({current_token})")
+            return build_alexa_play_response(
+                video_id=current_token,
+                title="Repeating Track",
+                author="YouTube",
+                base_url=base_url,
+                play_behavior="ENQUEUE",
+                expected_previous_token=current_token,
+            )
+
+        # Autoplay / Queue continuation
         related = related_cache.get(current_token, [])
         if related:
             next_song = related[0]
