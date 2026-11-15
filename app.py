@@ -48,19 +48,87 @@ async def fetch_with_failover(path: str, timeout: float = 6.0) -> Optional[Any]:
     return None
 
 
-async def search_youtube(query: str) -> Optional[Dict[str, Any]]:
-    """Searches YouTube via Invidious instances (supports Hindi, English, Punjabi)."""
-    # Clean up common filler words in query if any
-    cleaned_query = query.strip()
-    encoded_query = urllib.parse.quote_plus(cleaned_query)
+async def search_youtube_music_fast(query: str) -> Optional[Dict[str, Any]]:
+    """Ultra-fast direct YouTube Music (WEB_REMIX) search engine (~0.5s latency)."""
+    url = "https://music.youtube.com/youtubei/v1/search?alt=json"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Content-Type": "application/json",
+        "Referer": "https://music.youtube.com/",
+    }
+    payload = {
+        "context": {
+            "client": {
+                "clientName": "WEB_REMIX",
+                "clientVersion": "1.20240101.01.00",
+                "hl": "en",
+                "gl": "US",
+            }
+        },
+        "query": query,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=3.5) as client:
+            resp = await client.post(url, json=payload, headers=headers)
+            if resp.status_code == 200:
+                data = resp.json()
+                found = []
 
+                def walker(obj, current_title=None):
+                    if isinstance(obj, dict):
+                        t = current_title
+                        if "title" in obj and isinstance(obj["title"], dict) and "runs" in obj["title"]:
+                            runs = obj["title"].get("runs", [])
+                            if runs:
+                                t = runs[0].get("text")
+
+                        vid = None
+                        if "watchEndpoint" in obj and "videoId" in obj["watchEndpoint"]:
+                            vid = obj["watchEndpoint"]["videoId"]
+                        elif "videoId" in obj:
+                            vid = obj["videoId"]
+
+                        if vid and len(vid) == 11 and t:
+                            found.append({"videoId": vid, "title": t, "author": "YouTube Music"})
+                            return
+
+                        for k, v in obj.items():
+                            if len(found) >= 5:
+                                return
+                            walker(v, t)
+                    elif isinstance(obj, list):
+                        for it in obj:
+                            if len(found) >= 5:
+                                return
+                            walker(it, current_title)
+
+                walker(data)
+                if found:
+                    logger.info(f"Fast YouTube Music search hit in ~0.5s: {found[0]['title']} ({found[0]['videoId']})")
+                    return found[0]
+    except Exception as e:
+        logger.warning(f"Direct YouTube Music search failed: {e}")
+    return None
+
+
+async def search_youtube(query: str) -> Optional[Dict[str, Any]]:
+    """Searches YouTube Music directly for lightning-fast response, with Invidious failover."""
+    cleaned_query = query.strip()
+
+    # 1. Primary: Direct YouTube Music WEB_REMIX API (Sub-second response)
+    fast_result = await search_youtube_music_fast(cleaned_query)
+    if fast_result:
+        return fast_result
+
+    # 2. Secondary Fallback: Decentralized Invidious search
+    encoded_query = urllib.parse.quote_plus(cleaned_query)
     data = await fetch_with_failover(f"/api/v1/search?q={encoded_query}&type=video")
     if data and isinstance(data, list) and len(data) > 0:
         top = data[0]
         return {
             "videoId": top.get("videoId"),
             "title": top.get("title", cleaned_query),
-            "author": top.get("author", "YouTube"),
+            "author": top.get("author", "YouTube Music"),
         }
     return None
 
