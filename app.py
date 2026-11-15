@@ -8,9 +8,9 @@ from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("alexa-ytmusic")
 
-app = FastAPI(title="Alexa YouTube Music Bridge", version="1.0.0")
+app = FastAPI(title="Alexa YouTube Music Bridge", version="2.0.0")
 
-# List of reliable Invidious instances to query for search & stream extraction
+# Pool of reliable Invidious instances for public audio stream extraction
 INVIDIOUS_INSTANCES = [
     "https://yt.chocolatemoo53.com",
     "https://inv.tux.pizza",
@@ -22,7 +22,7 @@ INVIDIOUS_INSTANCES = [
 
 # In-memory stream cache: video_id -> direct stream url
 stream_cache: Dict[str, str] = {}
-# In-memory history for next/previous navigation: token -> next_token
+# In-memory queue cache for next/previous navigation: token -> list of next songs
 related_cache: Dict[str, List[Dict[str, str]]] = {}
 
 
@@ -107,6 +107,81 @@ async def resolve_audio_stream(video_id: str) -> Optional[str]:
     return None
 
 
+# ==============================================================================
+# Google OAuth 2.0 Account Linking Handlers (User Library & Playlists)
+# ==============================================================================
+
+async def get_user_liked_songs(access_token: str) -> List[Dict[str, str]]:
+    """Fetches user's Liked Music (playlistId=LL) using their Google OAuth token."""
+    url = "https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId=LL&maxResults=50"
+    headers = {"Authorization": f"Bearer {access_token}"}
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            resp = await client.get(url, headers=headers)
+            if resp.status_code == 200:
+                data = resp.json()
+                items = data.get("items", [])
+                tracks = []
+                for item in items:
+                    snippet = item.get("snippet", {})
+                    vid = snippet.get("resourceId", {}).get("videoId")
+                    if vid:
+                        tracks.append({
+                            "videoId": vid,
+                            "title": snippet.get("title", "Liked Song"),
+                            "author": snippet.get("videoOwnerChannelTitle", "YouTube Music"),
+                        })
+                return tracks
+            else:
+                logger.error(f"Google API returned error {resp.status_code}: {resp.text}")
+    except Exception as e:
+        logger.error(f"Failed to fetch liked songs: {e}")
+    return []
+
+
+async def get_user_personal_playlist(access_token: str, playlist_name: str) -> List[Dict[str, str]]:
+    """Finds a matching user playlist and returns its tracks."""
+    list_url = "https://www.googleapis.com/youtube/v3/playlists?part=snippet&mine=true&maxResults=50"
+    headers = {"Authorization": f"Bearer {access_token}"}
+    target_name = playlist_name.lower().strip()
+
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            resp = await client.get(list_url, headers=headers)
+            if resp.status_code == 200:
+                data = resp.json()
+                matching_id = None
+                for pl in data.get("items", []):
+                    title = pl.get("snippet", {}).get("title", "").lower()
+                    if target_name in title or title in target_name:
+                        matching_id = pl.get("id")
+                        break
+
+                if matching_id:
+                    items_url = f"https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId={matching_id}&maxResults=50"
+                    items_resp = await client.get(items_url, headers=headers)
+                    if items_resp.status_code == 200:
+                        items_data = items_resp.json()
+                        tracks = []
+                        for item in items_data.get("items", []):
+                            snippet = item.get("snippet", {})
+                            vid = snippet.get("resourceId", {}).get("videoId")
+                            if vid:
+                                tracks.append({
+                                    "videoId": vid,
+                                    "title": snippet.get("title", "Track"),
+                                    "author": snippet.get("videoOwnerChannelTitle", "YouTube Music"),
+                                })
+                        return tracks
+    except Exception as e:
+        logger.error(f"Failed to fetch personal playlist: {e}")
+    return []
+
+
+# ==============================================================================
+# Alexa Skill Response Builders
+# ==============================================================================
+
 def build_alexa_play_response(
     video_id: str,
     title: str,
@@ -187,12 +262,35 @@ def build_alexa_speech_response(text: str, end_session: bool = True) -> Dict[str
     }
 
 
+def build_alexa_link_account_response(text: str) -> Dict[str, Any]:
+    """Returns speech prompting the user to link their Google account with a card in the Alexa App."""
+    return {
+        "version": "1.0",
+        "response": {
+            "outputSpeech": {
+                "type": "PlainText",
+                "text": text,
+            },
+            "card": {
+                "type": "LinkAccount",
+            },
+            "shouldEndSession": True,
+        },
+    }
+
+
+# ==============================================================================
+# Endpoints
+# ==============================================================================
+
 @app.get("/")
 @app.get("/health")
 async def health_check():
     return {
         "status": "online",
         "service": "Alexa YouTube Music Bridge",
+        "version": "2.0.0",
+        "features": ["Public Search", "Google Account Linking (Multi-User)", "AudioPlayer Autoplay"],
         "instances_configured": len(INVIDIOUS_INSTANCES),
     }
 
@@ -205,10 +303,8 @@ async def stream_audio(video_id: str, request: Request, proxy: bool = False):
         return Response(status_code=404, content="Audio stream could not be resolved.")
 
     if not proxy:
-        # Alexa natively supports HTTP 302 redirects to HTTPS streams
         return RedirectResponse(url=direct_url, status_code=302)
 
-    # Proxy mode (forwarding stream chunks with range headers if requested)
     headers = {"User-Agent": "Mozilla/5.0"}
     client = httpx.AsyncClient(timeout=30.0, follow_redirects=True)
     req = client.build_request("GET", direct_url, headers=headers)
@@ -234,27 +330,84 @@ async def alexa_webhook(request: Request):
     req_type = body.get("request", {}).get("type")
     base_url = str(request.base_url).rstrip("/")
 
-    logger.info(f"Received Alexa request type: {req_type}")
+    # Extract OAuth accessToken if the user linked their Google account
+    access_token = body.get("context", {}).get("System", {}).get("user", {}).get("accessToken")
 
-    # 1. Launch Request ("Alexa, open YouTube Music")
+    logger.info(f"Received Alexa request: type={req_type}, user_authenticated={bool(access_token)}")
+
+    # 1. Launch Request
     if req_type == "LaunchRequest":
+        status_msg = "Your Google account is linked." if access_token else "You can ask for any song, or link your Google account in the Alexa app."
         return build_alexa_speech_response(
-            "YouTube Music is ready. What song or artist would you like to hear?",
+            f"YouTube Music is ready. {status_msg} What would you like to hear?",
             end_session=False,
         )
 
-    # 2. Intent Request ("Alexa, ask YouTube Music to play...")
+    # 2. Intent Request
     if req_type == "IntentRequest":
         intent = body.get("request", {}).get("intent", {})
         intent_name = intent.get("name")
         logger.info(f"Intent name: {intent_name}")
 
-        # Play Music
-        if intent_name in ("PlayMusicIntent", "PlayPlaylistIntent"):
-            query = (
-                intent.get("slots", {}).get("query", {}).get("value")
-                or intent.get("slots", {}).get("playlist", {}).get("value")
+        # Play User's Liked Songs ("play my liked songs", "play my favorites")
+        if intent_name == "PlayLikedSongsIntent":
+            if not access_token:
+                return build_alexa_link_account_response(
+                    "To play your liked songs and library, please link your Google account using the card sent to your Alexa app."
+                )
+
+            liked_tracks = await get_user_liked_songs(access_token)
+            if not liked_tracks:
+                return build_alexa_speech_response("I couldn't find any liked songs in your YouTube Music library.")
+
+            first_track = liked_tracks[0]
+            # Cache remaining tracks for next button / queue
+            related_cache[first_track["videoId"]] = liked_tracks[1:]
+
+            return build_alexa_play_response(
+                video_id=first_track["videoId"],
+                title=first_track["title"],
+                author=first_track["author"],
+                base_url=base_url,
+                speech_text="Playing your liked songs from YouTube Music.",
             )
+
+        # Play Playlist ("play playlist X", "play my playlist X")
+        if intent_name == "PlayPlaylistIntent":
+            playlist_name = intent.get("slots", {}).get("playlist", {}).get("value")
+            if not playlist_name:
+                return build_alexa_speech_response("What playlist do you want to play?", end_session=False)
+
+            # If user has linked Google account, check personal playlists first
+            if access_token:
+                personal_tracks = await get_user_personal_playlist(access_token, playlist_name)
+                if personal_tracks:
+                    first_track = personal_tracks[0]
+                    related_cache[first_track["videoId"]] = personal_tracks[1:]
+                    return build_alexa_play_response(
+                        video_id=first_track["videoId"],
+                        title=first_track["title"],
+                        author=first_track["author"],
+                        base_url=base_url,
+                        speech_text=f"Playing your playlist {playlist_name}.",
+                    )
+
+            # Fallback to public search for the playlist / mix
+            result = await search_youtube(f"{playlist_name} playlist")
+            if not result:
+                return build_alexa_speech_response(f"Sorry, I couldn't find a playlist for {playlist_name}.")
+
+            return build_alexa_play_response(
+                video_id=result["videoId"],
+                title=result["title"],
+                author=result["author"],
+                base_url=base_url,
+                speech_text=f"Playing {result['title']}.",
+            )
+
+        # General Music Search ("play Starboy", "play Coldplay")
+        if intent_name == "PlayMusicIntent":
+            query = intent.get("slots", {}).get("query", {}).get("value")
             if not query:
                 return build_alexa_speech_response("What song do you want to play?", end_session=False)
 
@@ -300,6 +453,8 @@ async def alexa_webhook(request: Request):
             related = related_cache.get(current_token, [])
             if related:
                 next_song = related.pop(0)
+                # Keep remaining queue for subsequent skips
+                related_cache[next_song["videoId"]] = related
                 return build_alexa_play_response(
                     video_id=next_song["videoId"],
                     title=next_song["title"],
@@ -325,7 +480,7 @@ async def alexa_webhook(request: Request):
         # Help
         if intent_name == "AMAZON.HelpIntent":
             return build_alexa_speech_response(
-                "You can say, play Starboy by The Weeknd, or say next, previous, or pause. What would you like to hear?",
+                "You can say, play Starboy by The Weeknd, play my liked songs, play playlist Chill, or say next, previous, or pause. What would you like to hear?",
                 end_session=False,
             )
 
@@ -345,5 +500,5 @@ async def alexa_webhook(request: Request):
                 expected_previous_token=current_token,
             )
 
-    # AudioPlayer status notifications (PlaybackStarted, Finished, Stopped, Failed)
+    # AudioPlayer status notifications
     return {"version": "1.0", "response": {}}

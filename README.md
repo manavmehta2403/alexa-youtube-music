@@ -1,81 +1,138 @@
-# Alexa YouTube Music Bridge (100% Free & 24/7)
+# 🎵 Alexa YouTube Music Bridge
 
-A lightweight, high-performance bridge that enables **Amazon Echo / Alexa** to search, stream, and continuously play any song, artist, or playlist from **YouTube Music** for free.
+An open-source, multi-cloud bridge that enables **Amazon Echo & Alexa** devices to search, stream, and play music directly from **YouTube Music**.
 
----
-
-## Features
-- **Zero Cost (100% Free):** Runs on Render's free 24/7 cloud tier (no credit card required) or locally on your PC.
-- **No IP Blocks / CAPTCHAs:** Uses a smart decentralized failover engine across Invidious instances to extract AAC audio streams without datacenter IP bans.
-- **Continuous Gapless Playback:** Listens for Alexa's `AudioPlayer.PlaybackNearlyFinished` events and automatically queues related songs for continuous music playback.
-- **Full Voice & Hardware Controls:** Supports Play, Pause, Resume, Next, Previous, Repeat, and Volume controls directly via voice or your Echo buttons.
+Supports **public music search**, **gapless continuous playback**, and **Google Account Linking (OAuth 2.0)** so each user can access their personal **Liked Songs**, **private playlists**, and **personal library**.
 
 ---
 
-## Step 1: Deploy Backend to Free Cloud (2 Minutes)
+## 🌟 Features
+- **100% Free & Open Source:** Deployable to Render, Railway, Koyeb, Fly.io, or run locally.
+- **Multi-User Google Login:** Each user links their own Google account via the Alexa app to play their personal library.
+- **Liked Songs & Private Playlists:** Say *"Alexa, ask YouTube Music to play my liked songs"*.
+- **Anti-Bot Failover Pool:** Resolves streams through decentralized Invidious nodes without datacenter IP bans.
+- **Continuous Autoplay:** Enqueues recommended tracks seamlessly via Alexa's `AudioPlayer.PlaybackNearlyFinished` protocol.
+- **Standard Controls:** Hardware buttons and voice commands work for Pause, Resume, Next, Previous, and Restart.
 
-You can host this on **Render.com** (completely free forever):
+---
 
-1. **Push this folder to a free GitHub repository** (e.g. `my-alexa-ytmusic`).
-2. Go to [Render.com](https://render.com) and create a free account (sign in with GitHub).
-3. Click **New +** → **Web Service**.
-4. Connect your `my-alexa-ytmusic` repository.
-5. Configure the settings:
-   - **Environment:** `Python 3`
+## 🚀 Quick Deploy to Any Cloud
+
+Choose your preferred hosting provider. All options support Docker and Python out of the box:
+
+### Option A: Render.com (Recommended - 100% Free Forever)
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy)
+1. Fork or push this repository to your GitHub account.
+2. In [Render Dashboard](https://dashboard.render.com), click **New +** → **Web Service**.
+3. Select this repository:
+   - **Runtime:** `Python 3`
    - **Build Command:** `pip install -r requirements.txt`
    - **Start Command:** `uvicorn app:app --host 0.0.0.0 --port $PORT`
-   - **Instance Type:** `Free`
-6. Click **Create Web Service**.
-7. In ~60 seconds, Render will provide your live public HTTPS URL:
-   ```
-   https://alexa-youtube-music-xxxx.onrender.com
-   ```
-
-*(Optional: To test locally on your computer right now, simply run `uvicorn app:app --reload`)*
+   - **Plan:** `Free`
+4. Click **Create Web Service**. Your live endpoint will be:
+   `https://<your-service-name>.onrender.com/alexa`
 
 ---
 
-## Step 2: Set Up Alexa Skill (3 Minutes)
-
-1. Go to the [Alexa Developer Console](https://developer.amazon.com/alexa/console/ask) and log in with the **same Amazon account** used on your Echo devices.
-2. Click **Create Skill**:
-   - **Skill Name:** `YouTube Music` (or whatever you prefer)
-   - **Primary Locale:** Select your language/country (e.g. English US / UK / IN)
-   - **Experience:** `Custom`
-   - **Hosting method:** `Provision your own`
-   - Click **Next** → Select **Start from Scratch** → Click **Create Skill**.
-3. **Import Interaction Model:**
-   - In the left sidebar, click **Interaction Model** → **JSON Editor**.
-   - Drag and drop or paste the entire contents of [`interaction_model.json`](file:///C:/Users/manav/Downloads/alexa-youtube-music/interaction_model.json).
-   - Click **Save Model** at the top.
-4. **Enable Audio Player:**
-   - In the left sidebar, click **Interfaces**.
-   - Turn **ON** the toggle for **Audio Player**.
-   - Click **Save Interfaces**.
-5. **Set the Endpoint:**
-   - In the left sidebar, click **Endpoint**.
-   - Select **HTTPS**.
-   - In the **Default Region** text box, paste your Render URL with `/alexa`:
-     ```
-     https://alexa-youtube-music-xxxx.onrender.com/alexa
-     ```
-   - In the SSL dropdown below it, choose:
-     `My development endpoint is a sub-domain of a domain that has a wildcard certificate from a certificate authority`
-   - Click **Save Endpoints**.
-6. **Build Skill:**
-   - In the left sidebar, click **Interaction Model** → Click **Build Model**.
-   - Wait ~30 seconds for the build to finish.
+### Option B: Railway.app
+1. Go to [Railway.app](https://railway.app) → **New Project** → **Deploy from GitHub repo**.
+2. Select this repo. Railway automatically detects the `Procfile` and `Dockerfile`.
+3. Go to **Settings** → **Generate Domain**. Your endpoint is:
+   `https://<your-domain>.up.railway.app/alexa`
 
 ---
 
-## Step 3: Speak to your Echo Speaker!
+### Option C: Koyeb (Free Tier)
+1. In [Koyeb Dashboard](https://app.koyeb.com), click **Create App** → **GitHub**.
+2. Select this repo.
+3. Set Port to `8000`. Your endpoint is:
+   `https://<your-app>.koyeb.app/alexa`
 
-Your skill is automatically live on all your Echo devices connected to your Amazon account. You do **not** need to submit it for certification!
+---
 
-Try these commands:
-* *"Alexa, ask YouTube Music to play Starboy"*
-* *"Alexa, ask YouTube Music to play Believer by Imagine Dragons"*
-* *"Alexa, ask YouTube Music to play playlist Lofi Chill"*
-* *"Alexa, pause"* / *"Alexa, resume"*
-* *"Alexa, next"* / *"Alexa, previous"*
-* *"Alexa, restart"*
+### Option D: Docker / Local Run
+```bash
+git clone https://github.com/manavmehta2403/alexa-youtube-music.git
+cd alexa-youtube-music
+
+# Run with Python:
+pip install -r requirements.txt
+uvicorn app:app --host 0.0.0.0 --port 8000
+
+# Or run with Docker:
+docker build -t alexa-ytmusic .
+docker run -p 8000:8000 alexa-ytmusic
+```
+
+---
+
+## 🔑 How to Setup Google Account Login (Personal Library & Liked Songs)
+
+Google Account Linking allows Alexa to fetch your personal YouTube Music library. Because this uses standard OAuth 2.0, **multiple users can each link their own separate Google account!**
+
+### Step 1: Create OAuth Credentials in Google Cloud Console
+1. Go to [Google Cloud Console](https://console.cloud.google.com/) and create a project (e.g. `My Alexa YouTube Music`).
+2. Go to **APIs & Services** → **Library** → Search for **YouTube Data API v3** → Click **Enable**.
+3. Go to **APIs & Services** → **OAuth consent screen**:
+   - User Type: **External**
+   - App Name: `YouTube Music for Alexa`
+   - User Support Email: Your email
+   - Under **Scopes**, click **Add or Remove Scopes** and add:
+     - `https://www.googleapis.com/auth/youtube.readonly`
+     - `openid`
+     - `profile`
+     - `email`
+   - Under **Test Users**, add your personal Google email (and any family/friends' emails).
+4. Go to **APIs & Services** → **Credentials** → **Create Credentials** → **OAuth Client ID**:
+   - Application Type: **Web Application**
+   - Name: `Alexa Skill Client`
+   - Leave the redirect URIs open for now (we get them from Alexa in Step 2).
+   - Click **Create**. Copy your **Client ID** and **Client Secret**.
+
+---
+
+### Step 2: Configure Account Linking in Alexa Developer Console
+1. Open your skill in the [Alexa Developer Console](https://developer.amazon.com/alexa/console/ask).
+2. In the left sidebar, click **Account Linking** (under *Tools*).
+3. Toggle **Do you allow users to create an account or link to an existing account?** to **YES**.
+4. Configure these fields:
+   - **Security Provider Information:** Choose `Auth Code Grant`.
+   - **Authorization URI:** `https://accounts.google.com/o/oauth2/v2/auth?access_type=offline&prompt=consent`
+   - **Access Token URI:** `https://oauth2.googleapis.com/token`
+   - **Client ID:** *(Paste your Google Client ID from Step 1)*
+   - **Client Secret:** *(Paste your Google Client Secret from Step 1)*
+   - **Client Authentication Scheme:** `Credentials in request body`
+   - **Scope:** Add:
+     - `https://www.googleapis.com/auth/youtube.readonly`
+     - `openid`
+     - `profile`
+     - `email`
+5. At the bottom of the Alexa Account Linking page, copy the **Alexa Redirect URLs**:
+   - `https://pitangui.amazon.com/api/run/skills/...`
+   - `https://layla.amazon.com/api/run/skills/...`
+   - `https://alexa.amazon.co.jp/api/run/skills/...`
+6. Return to your Google Cloud Console (from Step 1) → Edit your OAuth 2.0 Web Client → Paste all three Alexa Redirect URLs under **Authorized redirect URIs** → Click **Save**.
+7. In the Alexa Developer Console, click **Save** (top right).
+
+---
+
+### Step 3: Link Account in Alexa App
+1. Open the **Amazon Alexa App** on your phone (or go to [alexa.amazon.com](https://alexa.amazon.com)).
+2. Go to **More** → **Skills & Games** → **Your Skills** → **Dev**.
+3. Tap **YouTube Music** → Tap **Settings** → Tap **Link Account**.
+4. Sign in with your Google account and grant read access to YouTube.
+5. Your Google account is now linked!
+
+---
+
+## 🗣️ Voice Commands
+
+| Action | What to say |
+| :--- | :--- |
+| **Play any song** | *"Alexa, ask YouTube Music to play Starboy"* |
+| **Play by artist** | *"Alexa, ask YouTube Music to play Coldplay"* |
+| **Play your Liked Songs** | *"Alexa, ask YouTube Music to play my liked songs"* |
+| **Play personal playlist** | *"Alexa, ask YouTube Music to play my playlist Chill Vibes"* |
+| **Pause / Resume** | *"Alexa, pause"* / *"Alexa, resume"* |
+| **Next / Previous** | *"Alexa, next"* / *"Alexa, previous"* |
+| **Restart track** | *"Alexa, restart"* |

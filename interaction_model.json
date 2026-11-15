@@ -42,21 +42,11 @@
         },
         {
           "name": "AMAZON.NextIntent",
-          "samples": [
-            "next",
-            "skip",
-            "next song",
-            "skip song"
-          ]
+          "samples": []
         },
         {
           "name": "AMAZON.PreviousIntent",
-          "samples": [
-            "previous",
-            "go back",
-            "last song",
-            "previous song"
-          ]
+          "samples": []
         },
         {
           "name": "AMAZON.StartOverIntent",
@@ -105,7 +95,20 @@
             "play playlist {playlist}",
             "play the playlist {playlist}",
             "start playlist {playlist}",
-            "stream playlist {playlist}"
+            "stream playlist {playlist}",
+            "play my playlist {playlist}"
+          ]
+        },
+        {
+          "name": "PlayLikedSongsIntent",
+          "samples": [
+            "play my liked songs",
+            "play my liked music",
+            "play my favorites",
+            "play my thumbs up",
+            "play liked songs",
+            "play my library",
+            "shuffle my liked songs"
           ]
         }
       ],
