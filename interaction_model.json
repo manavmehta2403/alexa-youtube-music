@@ -1,0 +1,115 @@
+{
+  "interactionModel": {
+    "languageModel": {
+      "invocationName": "youtube music",
+      "intents": [
+        {
+          "name": "AMAZON.CancelIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.HelpIntent",
+          "samples": [
+            "help",
+            "what can i say",
+            "how do i use this"
+          ]
+        },
+        {
+          "name": "AMAZON.StopIntent",
+          "samples": [
+            "stop",
+            "shut up",
+            "be quiet"
+          ]
+        },
+        {
+          "name": "AMAZON.PauseIntent",
+          "samples": [
+            "pause",
+            "pause music",
+            "pause song"
+          ]
+        },
+        {
+          "name": "AMAZON.ResumeIntent",
+          "samples": [
+            "resume",
+            "continue",
+            "resume music",
+            "keep playing"
+          ]
+        },
+        {
+          "name": "AMAZON.NextIntent",
+          "samples": [
+            "next",
+            "skip",
+            "next song",
+            "skip song"
+          ]
+        },
+        {
+          "name": "AMAZON.PreviousIntent",
+          "samples": [
+            "previous",
+            "go back",
+            "last song",
+            "previous song"
+          ]
+        },
+        {
+          "name": "AMAZON.StartOverIntent",
+          "samples": [
+            "restart",
+            "start over",
+            "restart song"
+          ]
+        },
+        {
+          "name": "AMAZON.RepeatIntent",
+          "samples": [
+            "repeat",
+            "replay",
+            "play again"
+          ]
+        },
+        {
+          "name": "PlayMusicIntent",
+          "slots": [
+            {
+              "name": "query",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
+          "samples": [
+            "play {query}",
+            "play song {query}",
+            "play the song {query}",
+            "put on {query}",
+            "listen to {query}",
+            "play track {query}",
+            "search for {query}",
+            "find {query}"
+          ]
+        },
+        {
+          "name": "PlayPlaylistIntent",
+          "slots": [
+            {
+              "name": "playlist",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
+          "samples": [
+            "play playlist {playlist}",
+            "play the playlist {playlist}",
+            "start playlist {playlist}",
+            "stream playlist {playlist}"
+          ]
+        }
+      ],
+      "types": []
+    }
+  }
+}
