@@ -25,20 +25,11 @@
         },
         {
           "name": "AMAZON.PauseIntent",
-          "samples": [
-            "pause",
-            "pause music",
-            "pause song"
-          ]
+          "samples": []
         },
         {
           "name": "AMAZON.ResumeIntent",
-          "samples": [
-            "resume",
-            "continue",
-            "resume music",
-            "keep playing"
-          ]
+          "samples": []
         },
         {
           "name": "AMAZON.NextIntent",
