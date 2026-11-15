@@ -1,3 +1,4 @@
+import asyncio
 import difflib
 import logging
 import random
@@ -11,7 +12,7 @@ from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("alexa-ytmusic")
 
-app = FastAPI(title="Alexa YouTube Music Bridge", version="2.8.0")
+app = FastAPI(title="Alexa YouTube Music Bridge", version="2.9.0")
 
 # Pool of reliable Invidious instances for public audio stream extraction
 INVIDIOUS_INSTANCES = [
@@ -29,10 +30,14 @@ stream_cache: Dict[str, str] = {}
 # User playback state & queues: user_id -> {
 #    "tracks": List[Dict[str, str]],
 #    "current_index": int,
+#    "current_offset": int,
 #    "repeat": bool,
 #    "shuffle": bool
 # }
 user_queues: Dict[str, Dict[str, Any]] = {}
+
+# Cached user liked songs library: user_id -> List[Dict[str, str]]
+user_liked_cache: Dict[str, List[Dict[str, str]]] = {}
 
 
 async def fetch_with_failover(path: str, timeout: float = 6.0) -> Optional[Any]:
@@ -140,7 +145,7 @@ async def search_youtube(query: str) -> Optional[Dict[str, Any]]:
 
 
 async def resolve_audio_stream(video_id: str) -> Optional[str]:
-    """Extracts direct audio stream URL for video_id."""
+    """Extracts direct audio stream URL for video_id with cache and failover."""
     if video_id in stream_cache:
         return stream_cache[video_id]
 
@@ -162,7 +167,7 @@ async def resolve_audio_stream(video_id: str) -> Optional[str]:
     if not best_url and audio_formats:
         best_url = audio_formats[0].get("url")
 
-    # 3. Fallback to formatStreams
+    # 3. Fallback to formatStreams (combined mp4 audio/video)
     if not best_url:
         format_streams = data.get("formatStreams", [])
         for f in format_streams:
@@ -217,8 +222,13 @@ def match_playlist_score(target: str, candidate_title: str) -> float:
     return max(ratio, avg_token)
 
 
-async def get_user_liked_songs(access_token: str) -> List[Dict[str, str]]:
-    """Fetches user's authentic YouTube Music Liked Songs (using system playlist LM)."""
+async def get_user_liked_songs(user_id: str, access_token: str) -> List[Dict[str, str]]:
+    """Fetches user's authentic YouTube Music Liked Songs (using system playlist LM) with caching."""
+    # Use cached library if available
+    if user_id in user_liked_cache and len(user_liked_cache[user_id]) >= 20:
+        logger.info(f"Using cached liked songs for {user_id[:10]} ({len(user_liked_cache[user_id])} tracks)")
+        return user_liked_cache[user_id]
+
     headers = {"Authorization": f"Bearer {access_token}"}
     tracks: List[Dict[str, str]] = []
 
@@ -226,7 +236,7 @@ async def get_user_liked_songs(access_token: str) -> List[Dict[str, str]]:
     page_token = None
     try:
         async with httpx.AsyncClient(timeout=8.0) as client:
-            for _ in range(2):  # Fetch up to 100 liked music tracks
+            for _ in range(3):  # Fetch initial 150 tracks synchronously for instant response
                 url = "https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId=LM&maxResults=50"
                 if page_token:
                     url += f"&pageToken={page_token}"
@@ -251,6 +261,7 @@ async def get_user_liked_songs(access_token: str) -> List[Dict[str, str]]:
                     break
 
             if tracks:
+                user_liked_cache[user_id] = tracks
                 logger.info(f"Retrieved {len(tracks)} pure YouTube Music liked tracks from LM playlist")
                 return tracks
     except Exception as e:
@@ -290,6 +301,7 @@ async def get_user_liked_songs(access_token: str) -> List[Dict[str, str]]:
                             "title": title,
                             "author": snippet.get("videoOwnerChannelTitle", "YouTube Music"),
                         })
+                user_liked_cache[user_id] = tracks
                 logger.info(f"Filtered {len(tracks)} music tracks from Liked Videos fallback")
                 return tracks
     except Exception as e:
@@ -497,7 +509,7 @@ def build_alexa_play_response(
     }
 
     # CRITICAL: outputSpeech MUST NOT be included in AudioPlayer directives during
-    # AMAZON.NextIntent, AMAZON.PreviousIntent, or AudioPlayer events (it causes Alexa schema rejection)
+    # AMAZON.NextIntent, AMAZON.PreviousIntent, or AudioPlayer events (causes Alexa schema rejection)
     if speech_text:
         response["response"]["outputSpeech"] = {
             "type": "PlainText",
@@ -566,7 +578,7 @@ async def handle_liked_songs_request(
             "Apne liked gaane sunne ke liye, please link your Google account using the card sent to your Alexa app."
         )
 
-    liked_tracks = await get_user_liked_songs(access_token)
+    liked_tracks = await get_user_liked_songs(user_id, access_token)
     if not liked_tracks:
         return build_alexa_speech_response("No liked songs found in your YouTube Music library.")
 
@@ -577,6 +589,7 @@ async def handle_liked_songs_request(
     user_queues[user_id] = {
         "tracks": queue_tracks,
         "current_index": 0,
+        "current_offset": 0,
         "repeat": is_repeat,
         "shuffle": is_shuffle,
     }
@@ -621,6 +634,7 @@ async def handle_playlist_request(
             user_queues[user_id] = {
                 "tracks": queue_tracks,
                 "current_index": 0,
+                "current_offset": 0,
                 "repeat": is_repeat,
                 "shuffle": is_shuffle,
             }
@@ -648,6 +662,7 @@ async def handle_playlist_request(
         user_queues[user_id] = {
             "tracks": queue_tracks,
             "current_index": 0,
+            "current_offset": 0,
             "repeat": is_repeat,
             "shuffle": is_shuffle,
         }
@@ -680,7 +695,7 @@ async def health_check():
     return {
         "status": "online",
         "service": "Alexa YouTube Music Bridge",
-        "version": "2.8.0",
+        "version": "2.9.0",
         "features": [
             "Official Liked Music (LM) Playlist",
             "Personal Playlist Fuzzy Matching",
@@ -688,6 +703,8 @@ async def health_check():
             "Reliable Next & Previous Skipping",
             "Strict Playlist Hierarchy",
             "Shuffle & Repeat Support",
+            "Auto-Recovery on Playback Failure",
+            "Accurate Resume Offset Tracking",
         ],
         "instances_configured": len(INVIDIOUS_INSTANCES),
     }
@@ -834,6 +851,7 @@ async def alexa_webhook(request: Request):
             user_queues[user_id] = {
                 "tracks": [result],
                 "current_index": 0,
+                "current_offset": 0,
                 "repeat": is_repeat,
                 "shuffle": is_shuffle,
             }
@@ -856,13 +874,21 @@ async def alexa_webhook(request: Request):
             audio_state = body.get("context", {}).get("AudioPlayer", {})
             token = audio_state.get("token")
             offset = audio_state.get("offsetInMilliseconds", 0)
+            if not token and q and q.get("tracks"):
+                curr = q["tracks"][q["current_index"]]
+                token = curr["videoId"]
+                offset = q.get("current_offset", 0)
+
             if token:
+                curr_title = q["tracks"][q["current_index"]]["title"] if q and q.get("tracks") else "Resuming"
+                curr_author = q["tracks"][q["current_index"]]["author"] if q and q.get("tracks") else "YouTube Music"
                 return build_alexa_play_response(
                     video_id=token,
-                    title="Resuming",
-                    author="YouTube Music",
+                    title=curr_title,
+                    author=curr_author,
                     base_url=base_url,
                     offset=offset,
+                    speech_text=None,
                 )
             return build_alexa_speech_response("Kuch pause nahi hai resume karne ke liye.")
 
@@ -872,6 +898,7 @@ async def alexa_webhook(request: Request):
                 next_idx = q["current_index"] + 1
                 if next_idx < len(q["tracks"]):
                     q["current_index"] = next_idx
+                    q["current_offset"] = 0
                     next_song = q["tracks"][next_idx]
                     logger.info(f"User skipped to next track: {next_song['title']} (index {next_idx}/{len(q['tracks'])})")
                     return build_alexa_play_response(
@@ -881,7 +908,7 @@ async def alexa_webhook(request: Request):
                         base_url=base_url,
                         play_behavior="REPLACE_ALL",
                         offset=0,
-                        speech_text=None,  # MUST NOT include speech text
+                        speech_text=None,
                     )
             return build_alexa_stop_response()
 
@@ -890,6 +917,7 @@ async def alexa_webhook(request: Request):
             if q and q.get("tracks"):
                 if q["current_index"] > 0:
                     q["current_index"] -= 1
+                    q["current_offset"] = 0
                     prev_song = q["tracks"][q["current_index"]]
                     logger.info(f"User skipped to previous track: {prev_song['title']} (index {q['current_index']})")
                     return build_alexa_play_response(
@@ -899,10 +927,11 @@ async def alexa_webhook(request: Request):
                         base_url=base_url,
                         play_behavior="REPLACE_ALL",
                         offset=0,
-                        speech_text=None,  # MUST NOT include speech text
+                        speech_text=None,
                     )
                 else:
                     curr_song = q["tracks"][0]
+                    q["current_offset"] = 0
                     return build_alexa_play_response(
                         video_id=curr_song["videoId"],
                         title=curr_song["title"],
@@ -954,14 +983,42 @@ async def alexa_webhook(request: Request):
                     speech_text=None,
                 )
 
-    # 4. AudioPlayer Status Notifications (Update current_index when playback starts)
+    # 4. AudioPlayer Status Notifications (Update current_index & offset)
     if req_type == "AudioPlayer.PlaybackStarted":
         started_token = body.get("request", {}).get("token")
         if q and started_token:
             for idx, t in enumerate(q["tracks"]):
                 if t.get("videoId") == started_token:
                     q["current_index"] = idx
+                    q["current_offset"] = 0
                     logger.info(f"AudioPlayer confirmed playing index {idx}: {t.get('title')}")
                     break
+
+    if req_type == "AudioPlayer.PlaybackStopped":
+        offset = body.get("request", {}).get("offsetInMilliseconds", 0)
+        if q:
+            q["current_offset"] = offset
+
+    # 5. AudioPlayer Error Auto-Recovery: Skip failed stream to next track automatically
+    if req_type == "AudioPlayer.PlaybackFailed":
+        failed_token = body.get("request", {}).get("token")
+        error_info = body.get("request", {}).get("error", {})
+        logger.warning(f"AudioPlayer playback failed for {failed_token}: {error_info}")
+        if q and q.get("tracks"):
+            next_idx = q["current_index"] + 1
+            if next_idx < len(q["tracks"]):
+                q["current_index"] = next_idx
+                q["current_offset"] = 0
+                next_song = q["tracks"][next_idx]
+                logger.info(f"Auto-recovered to next track: {next_song['title']}")
+                return build_alexa_play_response(
+                    video_id=next_song["videoId"],
+                    title=next_song["title"],
+                    author=next_song["author"],
+                    base_url=base_url,
+                    play_behavior="REPLACE_ALL",
+                    offset=0,
+                    speech_text=None,
+                )
 
     return {"version": "1.0", "response": {}}
