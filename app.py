@@ -12,16 +12,21 @@ from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("alexa-ytmusic")
 
-app = FastAPI(title="Alexa YouTube Music Bridge", version="3.0.0")
+app = FastAPI(title="Alexa YouTube Music Bridge", version="3.1.0")
+
+try:
+    import yt_dlp
+except ImportError:
+    yt_dlp = None
 
 # Pool of verified, active Invidious instances for parallel racing audio stream resolution
 INVIDIOUS_INSTANCES = [
-    "https://invidious.protokolla.fi",
-    "https://invidious.projectsegfau.lt",
-    "https://invidious.slipfox.xyz",
-    "https://iv.ggtyler.dev",
-    "https://yt.artemislena.eu",
-    "https://invidious.privacydev.net",
+    "https://yt.chocolatemoo53.com",
+    "https://invidious.nerdvpn.de",
+    "https://invidious.tiekoetter.com",
+    "https://inv.nadeko.net",
+    "https://invidious.drgns.space",
+    "https://invidious.perennialte.ch",
 ]
 
 # In-memory stream cache: video_id -> direct stream url
@@ -58,12 +63,14 @@ async def startup_keepalive():
 
 
 async def fetch_single_instance(client: httpx.AsyncClient, instance: str, path: str, headers: Dict[str, str]) -> Dict[str, Any]:
-    """Helper to query a single Invidious instance."""
+    """Helper to query a single Invidious instance and validate payload."""
     url = f"{instance}{path}"
     resp = await client.get(url, headers=headers)
     if resp.status_code == 200:
-        return resp.json()
-    raise ValueError(f"Instance {instance} returned status {resp.status_code}")
+        data = resp.json()
+        if isinstance(data, dict) and ("adaptiveFormats" in data or "formatStreams" in data or "title" in data):
+            return data
+    raise ValueError(f"Instance {instance} returned status {resp.status_code} or invalid payload")
 
 
 async def fetch_with_failover(path: str, timeout: float = 3.5) -> Optional[Any]:
@@ -175,40 +182,76 @@ async def search_youtube(query: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def extract_with_ytdlp(video_id: str) -> Optional[str]:
+    """Native Python fallback using yt-dlp to extract high-quality direct audio stream URL."""
+    if not yt_dlp:
+        return None
+    try:
+        ydl_opts = {
+            "format": "bestaudio[ext=m4a]/bestaudio/best",
+            "quiet": True,
+            "no_warnings": True,
+            "noplaylist": True,
+            "skip_download": True,
+            "extractor_args": {
+                "youtube": {
+                    "player_client": ["android", "ios", "web"]
+                }
+            }
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
+            if info and "url" in info:
+                return info["url"]
+            formats = info.get("formats", []) if info else []
+            audio_formats = [f for f in formats if f.get("vcodec") == "none" and f.get("url")]
+            if audio_formats:
+                return audio_formats[-1]["url"]
+    except Exception as e:
+        logger.warning(f"yt-dlp extraction note for {video_id}: {e}")
+    return None
+
+
 async def resolve_audio_stream(video_id: str) -> Optional[str]:
-    """Extracts direct audio stream URL for video_id with cache and parallel racing failover."""
+    """Extracts direct audio stream URL for video_id with cache, parallel racing failover, and yt-dlp backup."""
     if video_id in stream_cache:
         return stream_cache[video_id]
 
     data = await fetch_with_failover(f"/api/v1/videos/{video_id}")
-    if not data or not isinstance(data, dict):
-        return None
+    if data and isinstance(data, dict):
+        adaptive_formats = data.get("adaptiveFormats", [])
+        audio_formats = [f for f in adaptive_formats if "audio" in f.get("type", "")]
 
-    adaptive_formats = data.get("adaptiveFormats", [])
-    audio_formats = [f for f in adaptive_formats if "audio" in f.get("type", "")]
-
-    best_url = None
-    # 1. Prefer audio/mp4 (AAC) for Alexa native player
-    for f in audio_formats:
-        if "audio/mp4" in f.get("type", ""):
-            best_url = f.get("url")
-            break
-
-    # 2. Fallback to any audio stream
-    if not best_url and audio_formats:
-        best_url = audio_formats[0].get("url")
-
-    # 3. Fallback to formatStreams (combined mp4 audio/video)
-    if not best_url:
-        format_streams = data.get("formatStreams", [])
-        for f in format_streams:
-            if "mp4" in f.get("type", "") or "video/mp4" in f.get("container", ""):
+        best_url = None
+        # 1. Prefer audio/mp4 (AAC) for Alexa native player
+        for f in audio_formats:
+            if "audio/mp4" in f.get("type", "") and f.get("url"):
                 best_url = f.get("url")
                 break
 
-    if best_url:
-        stream_cache[video_id] = best_url
-        return best_url
+        # 2. Fallback to any audio stream
+        if not best_url and audio_formats:
+            best_url = audio_formats[0].get("url")
+
+        # 3. Fallback to formatStreams (combined mp4 audio/video)
+        if not best_url:
+            format_streams = data.get("formatStreams", [])
+            for f in format_streams:
+                if ("mp4" in f.get("type", "") or "video/mp4" in f.get("container", "")) and f.get("url"):
+                    best_url = f.get("url")
+                    break
+
+        if best_url:
+            stream_cache[video_id] = best_url
+            return best_url
+
+    # Fallback to native yt-dlp engine if Invidious instances are throttled or fail
+    if yt_dlp:
+        logger.info(f"Resolving {video_id} via native yt-dlp engine...")
+        direct_url = await asyncio.to_thread(extract_with_ytdlp, video_id)
+        if direct_url:
+            stream_cache[video_id] = direct_url
+            return direct_url
 
     return None
 
@@ -742,10 +785,11 @@ async def health_check():
     return {
         "status": "online",
         "service": "Alexa YouTube Music Bridge",
-        "version": "3.0.0",
+        "version": "3.1.0",
         "features": [
             "Self-Pinging Keep-Alive Heartbeat (Zero Cold Starts)",
             "Parallel Racing Audio Resolution (<1.5s vs 25s)",
+            "Dual-Engine Fallback (Invidious Race + Native yt-dlp)",
             "Instant Pre-Warmed Audio Streams (<0.1s)",
             "Official Liked Music (LM) Playlist",
             "Personal Playlist Fuzzy Matching",
@@ -854,7 +898,11 @@ async def alexa_webhook(request: Request):
 
         # Play Playlist ("play my punjabi playlist", "playlist lofi bajao", "aajkal punjabi playlist")
         if intent_name == "PlayPlaylistIntent":
-            playlist_name = intent.get("slots", {}).get("playlist", {}).get("value", "")
+            playlist_name = (
+                intent.get("slots", {}).get("playlist", {}).get("value", "")
+                or intent.get("slots", {}).get("playlistName", {}).get("value", "")
+                or intent.get("slots", {}).get("query", {}).get("value", "")
+            )
             if not playlist_name:
                 return build_alexa_speech_response("Kaunsi playlist bajani hai? (What playlist do you want to play?)", end_session=False)
 
@@ -865,7 +913,12 @@ async def alexa_webhook(request: Request):
 
         # General Music Search ("jagjit singh ke ganne lagao", "play Starboy", "arijit singh bajao")
         if intent_name == "PlayMusicIntent":
-            query = intent.get("slots", {}).get("query", {}).get("value", "")
+            query = (
+                intent.get("slots", {}).get("query", {}).get("value", "")
+                or intent.get("slots", {}).get("song", {}).get("value", "")
+                or intent.get("slots", {}).get("music", {}).get("value", "")
+                or intent.get("slots", {}).get("search", {}).get("value", "")
+            )
             if not query:
                 return build_alexa_speech_response("Kaunsa gaana lagau? (What song should I play?)", end_session=False)
 
