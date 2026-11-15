@@ -1,143 +1,68 @@
-# 🎵 Alexa YouTube Bridge (Hindi, English, Shuffle & Repeat)
+# Alexa YouTube Music Bridge (v2.9.0)
 
-An open-source, multi-cloud bridge that enables **Amazon Echo & Alexa** devices to search, stream, and play music directly from **YouTube & YouTube Music**.
-
-Supports **English & Hindi/Hinglish commands**, **Shuffle & Repeat modes**, **public search**, and **Google Account Linking (OAuth 2.0)** so each user can access their personal **Liked Songs**, **Punjabi playlists**, and **personal library**.
+A high-performance, private, zero-cost Alexa skill bridge for Google YouTube Music. Enables full hands-free voice control on Amazon Echo devices in English, Hindi, and Hinglish.
 
 ---
 
-## 🌟 Key Features
-- **Hindi, Punjabi & English Support:** Full support for Hinglish natural queries (*"Jagjit Singh ke ganne lagao"*, *"Punjabi playlist bajao"*).
-- **Shuffle & Repeat:** Say *"play my liked songs on shuffle"* or *"play on repeat"*.
-- **Multi-User Google Login:** Each user links their own Google account via the Alexa app to stream their personal library.
-- **Anti-Bot Failover Pool:** Resolves streams through decentralized Invidious nodes with 0 datacenter IP blocks.
-- **Continuous Autoplay:** Enqueues recommended tracks seamlessly via Alexa's `AudioPlayer.PlaybackNearlyFinished` protocol.
-- **Hardware & Voice Controls:** Play, Pause, Resume, Next, Previous, Repeat, and Volume controls.
+## Features
+- **Official YouTube Music Liked Songs**: Directly queries the `LM` system playlist for pure music tracks (no non-music YouTube video clutter).
+- **Fuzzy Library Playlist Matching**: Typo-tolerant matching (`aajkal punjabi` &rarr; `aajkl Punjabi`) with sequence matching algorithms.
+- **Strict Playlist vs Song Hierarchy**: Explicit playlist requests never fall back to random video searches. If a playlist is not found, the skill explicitly notifies you.
+- **Continuous Gapless Autoplay**: Pre-enqueues subsequent tracks via `AudioPlayer.PlaybackNearlyFinished` with zero latency and zero gap.
+- **Full Navigation Controls**: Instant `Next`, `Previous`, `Start Over`, `Pause`, `Resume`, `Shuffle`, and `Repeat`.
+- **Zero Amazon Protocol Rejections**: Complies strictly with Amazon AudioPlayer specifications (strips `outputSpeech` on playback control directives to prevent silent drops).
+- **Playback Failure Auto-Recovery**: Automatically recovers and skips to the next working song if any network or stream error occurs.
+- **Lightning-Fast Responses**: Uses direct `WEB_REMIX` endpoints for sub-second (~0.5s) search queries.
+- **Zero Cloud Costs**: Fully automated deployment on Render.com free tier with auto-deploy hooks.
 
 ---
 
-## 🗣️ Voice Commands (English & Hindi)
+## Voice Commands Reference
 
-### 🔀 Shuffle & Repeat Commands
-* *"Alexa, ask YouTube Music to play my liked songs on shuffle"*
-* *"Alexa, ask YouTube Music to play my liked songs on repeat"*
-* *"Alexa, ask YouTube Music to shuffle my Punjabi playlist"*
-* *"Alexa, shuffle"* / *"Alexa, repeat"*
+### 1. Liked Songs
+- *"Alexa, ask YouTube Music to play my liked songs"*
+- *"Alexa, ask YouTube Music to play my liked songs on shuffle"*
+- *"Alexa, ask YouTube Music mere liked gane bajao"*
 
-### 🇮🇳 Hindi / Hinglish Commands
-* *"Alexa, ask YouTube Music Jagjit Singh ke ganne lagao"*
-* *"Alexa, ask YouTube Music Arijit Singh ke gaane sunao"*
-* *"Alexa, ask YouTube Music Punjabi playlist bajao"*
-* *"Alexa, ask YouTube Music mere liked gane bajao"*
-* *"Alexa, ask YouTube Music mere pasandida gane shuffle par lagao"*
-* *"Alexa, ask YouTube Music shuru se lagao"* / *"Alexa, band karo"*
+### 2. Personal Playlists
+- *"Alexa, ask YouTube Music to play my aajkal punjabi playlist"*
+- *"Alexa, ask YouTube Music to play my aajkal punjabi playlist on shuffle"*
+- *"Alexa, ask YouTube Music to play Z playlist"*
+- *"Alexa, ask YouTube Music to play Mix 22"*
+- *"Alexa, ask YouTube Music meri punjabi playlist chalao"*
 
-### 🇬🇧 English Commands
-* *"Alexa, ask YouTube Music to play Starboy"*
-* *"Alexa, ask YouTube Music to play Believer by Imagine Dragons"*
-* *"Alexa, ask YouTube Music to play playlist Lofi Chill"*
-* *"Alexa, ask YouTube Music to play my liked songs"*
-* *"Alexa, next"* / *"Alexa, previous"* / *"Alexa, pause"* / *"Alexa, resume"*
+### 3. Public Curated Playlists
+- *"Alexa, ask YouTube Music to play Lofi playlist"*
+- *"Alexa, ask YouTube Music to play Punjabi workout playlist"*
+- *"Alexa, ask YouTube Music to play Bollywood party playlist"*
 
-*(Note: If you configured your invocation name as `youtube music`, say "ask YouTube Music to...". If set to `youtube`, say "ask YouTube Music to...")*
+### 4. Direct Song & Artist Search
+- *"Alexa, ask YouTube Music to play Starboy"*
+- *"Alexa, ask YouTube Music Jagjit Singh ke gane lagao"*
+- *"Alexa, ask YouTube Music Arijit Singh bajao"*
 
----
-
-## 🚀 Quick Deploy to Any Cloud
-
-Choose your preferred hosting provider. All options support Docker and Python out of the box:
-
-### Option A: Render.com (Recommended - 100% Free Forever)
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy)
-1. Fork or push this repository to your GitHub account.
-2. In [Render Dashboard](https://dashboard.render.com), click **New +** → **Web Service**.
-3. Select this repository:
-   - **Runtime:** `Python 3`
-   - **Build Command:** `pip install -r requirements.txt`
-   - **Start Command:** `uvicorn app:app --host 0.0.0.0 --port $PORT`
-   - **Plan:** `Free`
-4. Click **Create Web Service**. Your live endpoint will be:
-   `https://<your-service-name>.onrender.com/alexa`
+### 5. Playback Navigation
+- *"Alexa, next"* (Skips immediately to the next track)
+- *"Alexa, previous"* (Returns to previous track)
+- *"Alexa, restart"* or *"Alexa, start over"*
+- *"Alexa, pause"* / *"Alexa, resume"*
+- *"Alexa, shuffle"* / *"Alexa, repeat"*
 
 ---
 
-### Option B: Railway.app
-1. Go to [Railway.app](https://railway.app) → **New Project** → **Deploy from GitHub repo**.
-2. Select this repo. Railway automatically detects the `Procfile` and `Dockerfile`.
-3. Go to **Settings** → **Generate Domain**. Your endpoint is:
-   `https://<your-domain>.up.railway.app/alexa`
-
----
-
-### Option C: Koyeb (Free Tier)
-1. In [Koyeb Dashboard](https://app.koyeb.com), click **Create App** → **GitHub**.
-2. Select this repo.
-3. Set Port to `8000`. Your endpoint is:
-   `https://<your-app>.koyeb.app/alexa`
-
----
-
-### Option D: Docker / Local Run
-```bash
-git clone https://github.com/manavmehta2403/alexa-youtube-music.git
-cd alexa-youtube-music
-
-# Run with Python:
-pip install -r requirements.txt
-uvicorn app:app --host 0.0.0.0 --port 8000
-
-# Or run with Docker:
-docker build -t alexa-ytmusic .
-docker run -p 8000:8000 alexa-ytmusic
-```
-
----
-
-## 🔑 How to Setup Google Account Login (Personal Library & Liked Songs)
-
-Google Account Linking allows Alexa to fetch your personal YouTube Music library. Because this uses standard OAuth 2.0, **multiple users can each link their own separate Google account!**
-
-### Step 1: Create OAuth Credentials in Google Cloud Console
-1. Go to [Google Cloud Console](https://console.cloud.google.com/) and create a project (e.g. `My Alexa YouTube Music`).
-2. Go to **APIs & Services** → **Library** → Search for **YouTube Data API v3** → Click **Enable**.
-3. Go to **APIs & Services** → **OAuth consent screen**:
-   - User Type: **External**
-   - App Name: `YouTube Music for Alexa`
-   - User Support Email: Your email
-   - Under **Scopes**, click **Add or Remove Scopes** and add:
-     - `https://www.googleapis.com/auth/youtube.readonly`
-     - `openid`, `profile`, `email`
-   - Under **Test Users**, add your personal Google email (and any family/friends' emails).
-4. Go to **APIs & Services** → **Credentials** → **Create Credentials** → **OAuth Client ID**:
-   - Application Type: **Web Application**
-   - Name: `Alexa Skill Client`
-   - Click **Create**. Copy your **Client ID** and **Client Secret**.
-
----
-
-### Step 2: Configure Account Linking in Alexa Developer Console
-1. Open your skill in the [Alexa Developer Console](https://developer.amazon.com/alexa/console/ask).
-2. In the left sidebar, click **Account Linking** (under *Tools*).
-3. Toggle **Do you allow users to create an account or link to an existing account?** to **YES**.
-4. Configure these fields:
-   - **Security Provider Information:** Choose `Auth Code Grant`.
-   - **Authorization URI:** `https://accounts.google.com/o/oauth2/v2/auth?access_type=offline&prompt=consent`
-   - **Access Token URI:** `https://oauth2.googleapis.com/token`
-   - **Client ID:** *(Paste your Google Client ID from Step 1)*
-   - **Client Secret:** *(Paste your Google Client Secret from Step 1)*
-   - **Client Authentication Scheme:** `Credentials in request body`
-   - **Scope:** Add:
-     - `https://www.googleapis.com/auth/youtube.readonly`
-     - `openid`, `profile`, `email`
-5. At the bottom of the Alexa Account Linking page, copy the **Alexa Redirect URLs** (e.g. `https://pitangui.amazon.com/api/run/skills/...`).
-6. Return to Google Cloud Console (from Step 1) → Edit your OAuth 2.0 Web Client → Paste the Alexa Redirect URLs under **Authorized redirect URIs** → Click **Save**.
-7. In the Alexa Developer Console, click **Save** (top right).
-
----
-
-### Step 3: Link Account in Alexa App
+## 1-Minute Alexa Routine (To use "play ... on YouTube Music")
+Amazon reserves `"play [song] on [service]"` exclusively for Amazon-certified enterprise partners. To speak naturally without saying `"ask"`, create a quick Routine in the Alexa Mobile App:
 1. Open the **Amazon Alexa App** on your phone.
-2. Go to **More** → **Skills & Games** → **Your Skills** → **Dev**.
-3. Tap **YouTube Music** → Tap **Settings** → Tap **Link Account**.
-4. Sign in with your Google account and grant read access to YouTube.
-5. Your Google account is now linked!
+2. Tap **More** &rarr; **Routines** &rarr; **+**.
+3. Under **When you say**: `play my liked songs on YouTube Music` (or `play aajkal punjabi on YouTube Music`).
+4. Under **Add action**: Select **Custom** &rarr; `ask YouTube Music to play my liked songs`.
+5. Tap **Save**.
+
+---
+
+## Verification & Test Suite
+An automated test suite is included in `tests/test_end_to_end.py`. To run:
+```bash
+python -m unittest tests/test_end_to_end.py
+```
+Covers all Amazon ASK lifecycle events: Launch, Intent routing, AudioPlayer pre-enqueuing, playback failure recovery, and fuzzy matching.
