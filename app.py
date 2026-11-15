@@ -186,30 +186,105 @@ async def resolve_audio_stream(video_id: str) -> Optional[str]:
 # ==============================================================================
 
 async def get_user_liked_songs(access_token: str) -> List[Dict[str, str]]:
-    """Fetches user's Liked Music (playlistId=LL) using their Google OAuth token."""
-    url = "https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId=LL&maxResults=50"
-    headers = {"Authorization": f"Bearer {access_token}"}
+    """Fetches user's pure YouTube Music Liked Songs (filtering out non-music videos)."""
+    # 1. Primary: Direct YouTube Music Liked Music feed (FEmusic_liked_videos)
+    ytm_url = "https://music.youtube.com/youtubei/v1/browse?alt=json"
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Referer": "https://music.youtube.com/",
+    }
+    payload = {
+        "context": {
+            "client": {
+                "clientName": "WEB_REMIX",
+                "clientVersion": "1.20240101.01.00",
+                "hl": "en",
+                "gl": "US",
+            }
+        },
+        "browseId": "FEmusic_liked_videos",
+    }
     try:
         async with httpx.AsyncClient(timeout=8.0) as client:
-            resp = await client.get(url, headers=headers)
+            resp = await client.post(ytm_url, json=payload, headers=headers)
+            if resp.status_code == 200:
+                data = resp.json()
+                tracks = []
+
+                def walker(obj):
+                    if isinstance(obj, dict):
+                        if "musicResponsiveListItemRenderer" in obj:
+                            r = obj["musicResponsiveListItemRenderer"]
+                            cols = r.get("flexColumns", [])
+                            if cols:
+                                col1 = cols[0].get("musicResponsiveListItemFlexColumnRenderer", {}).get("text", {}).get("runs", [{}])
+                                title = col1[0].get("text", "")
+                                vid = None
+                                nav = col1[0].get("navigationEndpoint", {}).get("watchEndpoint", {})
+                                if nav:
+                                    vid = nav.get("videoId")
+                                if not vid and "overlay" in r:
+                                    btn = r.get("overlay", {}).get("musicItemThumbnailOverlayRenderer", {}).get("content", {}).get("musicPlayButtonRenderer", {}).get("playNavigationEndpoint", {}).get("watchEndpoint", {})
+                                    if btn:
+                                        vid = btn.get("videoId")
+                                artist = "YouTube Music"
+                                if len(cols) > 1:
+                                    col2 = cols[1].get("musicResponsiveListItemFlexColumnRenderer", {}).get("text", {}).get("runs", [{}])
+                                    if col2:
+                                        artist = col2[0].get("text", "YouTube Music")
+                                if vid and title:
+                                    tracks.append({"videoId": vid, "title": title, "author": artist})
+                        for k, v in obj.items():
+                            walker(v)
+                    elif isinstance(obj, list):
+                        for it in obj:
+                            walker(it)
+
+                walker(data)
+                if tracks:
+                    logger.info(f"Retrieved {len(tracks)} pure YouTube Music liked tracks!")
+                    return tracks
+    except Exception as e:
+        logger.warning(f"Direct YouTube Music liked browse failed: {e}")
+
+    # 2. Fallback: YouTube Data API v3 playlistItems with Music category filter (Category 10 = Music)
+    api_url = "https://www.googleapis.com/youtube/v3/playlistItems?part=snippet,contentDetails&playlistId=LL&maxResults=50"
+    api_headers = {"Authorization": f"Bearer {access_token}"}
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            resp = await client.get(api_url, headers=api_headers)
             if resp.status_code == 200:
                 data = resp.json()
                 items = data.get("items", [])
+                video_ids = [it.get("snippet", {}).get("resourceId", {}).get("videoId") for it in items if it.get("snippet", {}).get("resourceId", {}).get("videoId")]
+
+                # Fetch category IDs to ensure only category 10 (Music) is returned
+                music_ids = set()
+                if video_ids:
+                    v_url = f"https://www.googleapis.com/youtube/v3/videos?part=snippet&id={','.join(video_ids[:50])}"
+                    v_resp = await client.get(v_url, headers=api_headers)
+                    if v_resp.status_code == 200:
+                        v_data = v_resp.json()
+                        for v in v_data.get("items", []):
+                            if v.get("snippet", {}).get("categoryId") == "10":
+                                music_ids.add(v.get("id"))
+
                 tracks = []
                 for item in items:
                     snippet = item.get("snippet", {})
                     vid = snippet.get("resourceId", {}).get("videoId")
-                    if vid:
+                    if vid and (not music_ids or vid in music_ids):
                         tracks.append({
                             "videoId": vid,
                             "title": snippet.get("title", "Liked Song"),
-                            "author": snippet.get("videoOwnerChannelTitle", "YouTube"),
+                            "author": snippet.get("videoOwnerChannelTitle", "YouTube Music"),
                         })
+                logger.info(f"Filtered {len(tracks)} music tracks from Liked Videos")
                 return tracks
-            else:
-                logger.error(f"Google API returned error {resp.status_code}: {resp.text}")
     except Exception as e:
-        logger.error(f"Failed to fetch liked songs: {e}")
+        logger.error(f"Failed to fetch liked songs fallback: {e}")
     return []
 
 
