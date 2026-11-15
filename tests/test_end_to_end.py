@@ -128,21 +128,23 @@ class TestAlexaYouTubeMusic(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(dir_pnf["playBehavior"], "ENQUEUE")
         self.assertEqual(dir_pnf["audioItem"]["stream"]["token"], "v_2")
 
-        # 2. Test AMAZON.NextIntent (must skip to v_2, REPLACE_ALL, and MUST NOT contain outputSpeech!)
+        # 2. Test AMAZON.NextIntent (must skip to v_2, REPLACE_ALL, and announce song name!)
         req_next = self.make_alexa_request(intent_name="AMAZON.NextIntent")
         resp_next = await self.client.post("/alexa", json=req_next)
         data_next = resp_next.json()
-        self.assertNotIn("outputSpeech", data_next["response"], "NextIntent must not contain outputSpeech in AudioPlayer!")
+        self.assertIn("outputSpeech", data_next["response"], "NextIntent should announce the song title to user!")
+        self.assertIn("Song 2", data_next["response"]["outputSpeech"]["text"])
         dir_next = data_next["response"]["directives"][0]
         self.assertEqual(dir_next["playBehavior"], "REPLACE_ALL")
         self.assertEqual(dir_next["audioItem"]["stream"]["token"], "v_2")
         self.assertEqual(user_queues[self.user_id]["current_index"], 1)
 
-        # 3. Test AMAZON.PreviousIntent (must skip back to v_1)
+        # 3. Test AMAZON.PreviousIntent (must skip back to v_1 and announce song name!)
         req_prev = self.make_alexa_request(intent_name="AMAZON.PreviousIntent")
         resp_prev = await self.client.post("/alexa", json=req_prev)
         data_prev = resp_prev.json()
-        self.assertNotIn("outputSpeech", data_prev["response"])
+        self.assertIn("outputSpeech", data_prev["response"], "PreviousIntent should announce the song title to user!")
+        self.assertIn("Song 1", data_prev["response"]["outputSpeech"]["text"])
         dir_prev = data_prev["response"]["directives"][0]
         self.assertEqual(dir_prev["audioItem"]["stream"]["token"], "v_1")
         self.assertEqual(user_queues[self.user_id]["current_index"], 0)

@@ -3,6 +3,7 @@ import difflib
 import logging
 import random
 import re
+import time
 import urllib.parse
 from typing import Any, Dict, List, Optional, Tuple
 import httpx
@@ -12,7 +13,7 @@ from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("alexa-ytmusic")
 
-app = FastAPI(title="Alexa YouTube Music Bridge", version="3.1.0")
+app = FastAPI(title="Alexa YouTube Music Bridge", version="3.2.0")
 
 try:
     import yt_dlp
@@ -43,6 +44,20 @@ user_queues: Dict[str, Dict[str, Any]] = {}
 
 # Cached user liked songs library: user_id -> List[Dict[str, str]]
 user_liked_cache: Dict[str, List[Dict[str, str]]] = {}
+
+# Rolling event buffer for live state diagnostics and monitoring
+recent_events: List[Dict[str, Any]] = []
+
+
+def record_event(event_type: str, details: Any):
+    """Records an incoming request or state transition for debugging."""
+    recent_events.append({
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "type": event_type,
+        "details": details,
+    })
+    if len(recent_events) > 50:
+        recent_events.pop(0)
 
 
 @app.on_event("startup")
@@ -305,91 +320,129 @@ def match_playlist_score(target: str, candidate_title: str) -> float:
 
 
 async def get_user_liked_songs(user_id: str, access_token: str) -> List[Dict[str, str]]:
-    """Fetches user's authentic YouTube Music Liked Songs (using system playlist LM) with caching."""
+    """Fetches user's authentic YouTube Music Liked Songs with intelligent multi-tier discovery and caching."""
     # Use cached library if available
-    if user_id in user_liked_cache and len(user_liked_cache[user_id]) >= 20:
+    if user_id in user_liked_cache and len(user_liked_cache[user_id]) >= 10:
         logger.info(f"Using cached liked songs for {user_id[:10]} ({len(user_liked_cache[user_id])} tracks)")
         return user_liked_cache[user_id]
 
     headers = {"Authorization": f"Bearer {access_token}"}
     tracks: List[Dict[str, str]] = []
 
-    # 1. Primary: YouTube Data API v3 playlistItems for playlistId=LM (Liked Music)
-    page_token = None
+    # 1. Tier 1: Check if user has a personal playlist titled 'Liked music' or 'Liked songs' or 'Favorites'
     try:
         async with httpx.AsyncClient(timeout=8.0) as client:
-            for _ in range(3):  # Fetch initial 150 tracks synchronously for instant response
-                url = "https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId=LM&maxResults=50"
-                if page_token:
-                    url += f"&pageToken={page_token}"
-                resp = await client.get(url, headers=headers)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    for item in data.get("items", []):
-                        snippet = item.get("snippet", {})
-                        vid = snippet.get("resourceId", {}).get("videoId")
-                        title = snippet.get("title", "")
-                        if vid and title and "deleted" not in title.lower() and "private" not in title.lower():
-                            tracks.append({
-                                "videoId": vid,
-                                "title": title,
-                                "author": snippet.get("videoOwnerChannelTitle", "YouTube Music"),
-                            })
-                    page_token = data.get("nextPageToken")
-                    if not page_token:
-                        break
-                else:
-                    logger.warning(f"LM query returned status {resp.status_code}: {resp.text}")
-                    break
-
-            if tracks:
-                user_liked_cache[user_id] = tracks
-                logger.info(f"Retrieved {len(tracks)} pure YouTube Music liked tracks from LM playlist")
-                return tracks
-    except Exception as e:
-        logger.error(f"Failed to fetch LM liked music: {e}")
-
-    # 2. Fallback: If LM fails, query LL but strictly enforce category 10 (Music)
-    api_url = "https://www.googleapis.com/youtube/v3/playlistItems?part=snippet,contentDetails&playlistId=LL&maxResults=50"
-    try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
-            resp = await client.get(api_url, headers=headers)
+            list_url = "https://www.googleapis.com/youtube/v3/playlists?part=snippet&mine=true&maxResults=50"
+            resp = await client.get(list_url, headers=headers)
             if resp.status_code == 200:
-                data = resp.json()
-                items = data.get("items", [])
-                video_ids = [
-                    it.get("snippet", {}).get("resourceId", {}).get("videoId")
-                    for it in items
-                    if it.get("snippet", {}).get("resourceId", {}).get("videoId")
+                pl_data = resp.json()
+                for pl in pl_data.get("items", []):
+                    title = pl.get("snippet", {}).get("title", "").lower()
+                    if any(w in title for w in ["liked music", "liked songs", "my likes", "favorites"]):
+                        pl_id = pl.get("id")
+                        items_url = f"https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId={pl_id}&maxResults=50"
+                        items_resp = await client.get(items_url, headers=headers)
+                        if items_resp.status_code == 200:
+                            for item in items_resp.json().get("items", []):
+                                snip = item.get("snippet", {})
+                                vid = snip.get("resourceId", {}).get("videoId")
+                                t = snip.get("title", "")
+                                if vid and t and "deleted" not in t.lower() and "private" not in t.lower():
+                                    tracks.append({
+                                        "videoId": vid,
+                                        "title": t,
+                                        "author": snip.get("videoOwnerChannelTitle", "YouTube Music"),
+                                    })
+                        if tracks:
+                            user_liked_cache[user_id] = tracks
+                            logger.info(f"Found {len(tracks)} liked songs from user playlist '{title}'")
+                            return tracks
+    except Exception as e:
+        logger.debug(f"Tier 1 personal playlist check note: {e}")
+
+    # 2. Tier 2: YouTube Data API v3 playlistItems for playlistId=LL (Liked Videos) with Smart Music Heuristics
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            ll_url = "https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId=LL&maxResults=50"
+            ll_resp = await client.get(ll_url, headers=headers)
+            if ll_resp.status_code == 200:
+                items = ll_resp.json().get("items", [])
+                non_music_keywords = [
+                    "tutorial", "python", "javascript", "code", "coding", "course", "lecture",
+                    "gameplay", "walkthrough", "review", "vlog", "unboxing", "install", "how to",
+                    "news", "reaction", "episode", "podcast", "talk", "full match", "highlights"
+                ]
+                music_keywords = [
+                    "official video", "music", "audio", "lyric", "song", "remix", "mashup",
+                    "lofi", "beat", "album", "ft.", "feat.", "gana", "gane", "soundtrack", "vevo"
                 ]
 
-                music_ids = set()
-                if video_ids:
-                    v_url = f"https://www.googleapis.com/youtube/v3/videos?part=snippet&id={','.join(video_ids[:50])}"
-                    v_resp = await client.get(v_url, headers=headers)
-                    if v_resp.status_code == 200:
-                        v_data = v_resp.json()
-                        for v in v_data.get("items", []):
-                            if v.get("snippet", {}).get("categoryId") == "10":
-                                music_ids.add(v.get("id"))
+                for it in items:
+                    snip = it.get("snippet", {})
+                    vid = snip.get("resourceId", {}).get("videoId")
+                    t = snip.get("title", "")
+                    ch = snip.get("videoOwnerChannelTitle", "")
 
-                for item in items:
-                    snippet = item.get("snippet", {})
-                    vid = snippet.get("resourceId", {}).get("videoId")
-                    title = snippet.get("title", "")
-                    if vid in music_ids and title and "deleted" not in title.lower() and "private" not in title.lower():
+                    if not vid or not t or "deleted" in t.lower() or "private" in t.lower():
+                        continue
+
+                    t_low = t.lower()
+                    ch_low = ch.lower()
+
+                    # Exclude obvious non-music videos
+                    if any(bad in t_low for bad in non_music_keywords):
+                        continue
+
+                    # Include if channel is clearly musical or title indicates music
+                    is_music_channel = any(m in ch_low for m in ["topic", "vevo", "music", "records", "t-series", "speed", "sony", "zee", "sound"])
+                    is_music_title = any(m in t_low for m in music_keywords)
+
+                    if is_music_channel or is_music_title or "-" in t:
                         tracks.append({
                             "videoId": vid,
-                            "title": title,
-                            "author": snippet.get("videoOwnerChannelTitle", "YouTube Music"),
+                            "title": t,
+                            "author": ch or "YouTube Music",
                         })
-                user_liked_cache[user_id] = tracks
-                logger.info(f"Filtered {len(tracks)} music tracks from Liked Videos fallback")
-                return tracks
-    except Exception as e:
-        logger.error(f"Failed to fetch liked songs fallback: {e}")
 
-    return []
+                if tracks:
+                    user_liked_cache[user_id] = tracks
+                    logger.info(f"Retrieved {len(tracks)} filtered music tracks from Liked Videos")
+                    return tracks
+    except Exception as e:
+        logger.error(f"Tier 2 Liked Videos fetch failed: {e}")
+
+    # 3. Tier 3: If no liked tracks found, fall back to user's first available personal playlist
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            list_url = "https://www.googleapis.com/youtube/v3/playlists?part=snippet&mine=true&maxResults=10"
+            resp = await client.get(list_url, headers=headers)
+            if resp.status_code == 200:
+                pl_items = resp.json().get("items", [])
+                if pl_items:
+                    fallback_pl = pl_items[0]
+                    fb_id = fallback_pl.get("id")
+                    fb_title = fallback_pl.get("snippet", {}).get("title", "")
+                    items_url = f"https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId={fb_id}&maxResults=50"
+                    items_resp = await client.get(items_url, headers=headers)
+                    if items_resp.status_code == 200:
+                        for item in items_resp.json().get("items", []):
+                            snip = item.get("snippet", {})
+                            vid = snip.get("resourceId", {}).get("videoId")
+                            t = snip.get("title", "")
+                            if vid and t and "deleted" not in t.lower() and "private" not in t.lower():
+                                tracks.append({
+                                    "videoId": vid,
+                                    "title": t,
+                                    "author": snip.get("videoOwnerChannelTitle", "YouTube Music"),
+                                })
+                    if tracks:
+                        user_liked_cache[user_id] = tracks
+                        logger.info(f"Using {len(tracks)} songs from personal playlist '{fb_title}' as music library fallback")
+                        return tracks
+    except Exception as e:
+        logger.debug(f"Tier 3 fallback note: {e}")
+
+    return tracks
 
 
 async def get_user_personal_playlist(access_token: str, playlist_name: str) -> Tuple[Optional[str], List[Dict[str, str]]]:
@@ -785,7 +838,7 @@ async def health_check():
     return {
         "status": "online",
         "service": "Alexa YouTube Music Bridge",
-        "version": "3.1.0",
+        "version": "3.2.0",
         "features": [
             "Self-Pinging Keep-Alive Heartbeat (Zero Cold Starts)",
             "Parallel Racing Audio Resolution (<1.5s vs 25s)",
@@ -794,7 +847,8 @@ async def health_check():
             "Official Liked Music (LM) Playlist",
             "Personal Playlist Fuzzy Matching",
             "Multi-Track Gapless Queueing",
-            "Reliable Next & Previous Skipping",
+            "Reliable Next & Previous Skipping (with Song Title Announcements)",
+            "Smart Music Heuristics for Liked Library",
             "Strict Playlist Hierarchy",
             "Shuffle & Repeat Support",
             "Auto-Recovery on Playback Failure",
@@ -802,6 +856,29 @@ async def health_check():
         ],
         "instances_configured": len(INVIDIOUS_INSTANCES),
         "cached_streams": len(stream_cache),
+    }
+
+
+@app.get("/debug/state")
+async def debug_state():
+    """Live diagnostic endpoint to inspect active user queues, recent requests, and current playing tracks."""
+    return {
+        "version": "3.2.0",
+        "cached_streams_count": len(stream_cache),
+        "cached_streams": list(stream_cache.keys()),
+        "user_queues": {
+            u: {
+                "tracks_count": len(d.get("tracks", [])),
+                "current_index": d.get("current_index"),
+                "current_track": d.get("tracks", [])[d.get("current_index")] if d.get("tracks") and d.get("current_index") < len(d.get("tracks")) else None,
+                "current_offset": d.get("current_offset"),
+                "repeat": d.get("repeat"),
+                "shuffle": d.get("shuffle"),
+                "upcoming_tracks": [t.get("title") for t in d.get("tracks", [])[d.get("current_index"):d.get("current_index") + 5]],
+            }
+            for u, d in user_queues.items()
+        },
+        "recent_events": recent_events[-30:],
     }
 
 
@@ -847,6 +924,15 @@ async def alexa_webhook(request: Request):
     q = user_queues.get(user_id)
 
     logger.info(f"Received Alexa request: type={req_type}, user={user_id[:12]}, authenticated={bool(access_token)}")
+    record_event("alexa_request", {
+        "type": req_type,
+        "user_id": user_id[:12],
+        "authenticated": bool(access_token),
+        "intent": body.get("request", {}).get("intent", {}).get("name") if req_type == "IntentRequest" else None,
+        "slots": body.get("request", {}).get("intent", {}).get("slots") if req_type == "IntentRequest" else None,
+        "token": body.get("request", {}).get("token"),
+        "error": body.get("request", {}).get("error"),
+    })
 
     # 1. Launch Request
     if req_type == "LaunchRequest":
@@ -928,6 +1014,49 @@ async def alexa_webhook(request: Request):
 
             q_low = query.lower()
 
+            # 0. Intercept voice skip commands within PlayMusicIntent (e.g. "play next song", "play next songs", "next track", "skip")
+            if any(w in q_low for w in ["next song", "next songs", "next track", "play next", "skip song", "skip", "agla gaana", "agla song"]):
+                logger.info(f"PlayMusicIntent query '{query}' intercepted as NEXT TRACK command")
+                if q and q.get("tracks"):
+                    next_idx = q["current_index"] + 1
+                    if next_idx < len(q["tracks"]):
+                        q["current_index"] = next_idx
+                        q["current_offset"] = 0
+                        next_song = q["tracks"][next_idx]
+                        if next_idx + 1 < len(q["tracks"]):
+                            asyncio.create_task(resolve_audio_stream(q["tracks"][next_idx + 1]["videoId"]))
+                        speech_text = f"Playing {next_song['title']} on YouTube Music."
+                        return build_alexa_play_response(
+                            video_id=next_song["videoId"],
+                            title=next_song["title"],
+                            author=next_song["author"],
+                            base_url=base_url,
+                            play_behavior="REPLACE_ALL",
+                            offset=0,
+                            speech_text=speech_text,
+                        )
+                    else:
+                        return build_alexa_speech_response("Aap playlist ke aakhri gaane par hain.")
+                return build_alexa_speech_response("Abhi koi music queue active nahi hai.")
+
+            if any(w in q_low for w in ["previous song", "previous songs", "pichla gaana", "pichla song", "go back"]):
+                logger.info(f"PlayMusicIntent query '{query}' intercepted as PREVIOUS TRACK command")
+                if q and q.get("tracks"):
+                    if q["current_index"] > 0:
+                        q["current_index"] -= 1
+                        q["current_offset"] = 0
+                        prev_song = q["tracks"][q["current_index"]]
+                        speech_text = f"Playing {prev_song['title']} on YouTube Music."
+                        return build_alexa_play_response(
+                            video_id=prev_song["videoId"],
+                            title=prev_song["title"],
+                            author=prev_song["author"],
+                            base_url=base_url,
+                            play_behavior="REPLACE_ALL",
+                            offset=0,
+                            speech_text=speech_text,
+                        )
+
             # 1. Did the user ask for liked songs via PlayMusicIntent?
             if any(w in q_low for w in ["liked", "favorites", "pasandida"]):
                 return await handle_liked_songs_request(user_id, access_token, base_url, is_shuffle, is_repeat)
@@ -999,7 +1128,7 @@ async def alexa_webhook(request: Request):
                 )
             return build_alexa_speech_response("Kuch pause nahi hai resume karne ke liye.")
 
-        # Next Track ("Alexa, next") - CRITICAL: No outputSpeech allowed by Alexa AudioPlayer!
+        # Next Track ("Alexa, next") - Announces song name as requested by user
         if intent_name == "AMAZON.NextIntent":
             if q and q.get("tracks"):
                 next_idx = q["current_index"] + 1
@@ -1012,6 +1141,7 @@ async def alexa_webhook(request: Request):
                         asyncio.create_task(resolve_audio_stream(q["tracks"][next_idx + 1]["videoId"]))
 
                     logger.info(f"User skipped to next track: {next_song['title']} (index {next_idx}/{len(q['tracks'])})")
+                    speech_text = f"Playing {next_song['title']} on YouTube Music."
                     return build_alexa_play_response(
                         video_id=next_song["videoId"],
                         title=next_song["title"],
@@ -1019,11 +1149,11 @@ async def alexa_webhook(request: Request):
                         base_url=base_url,
                         play_behavior="REPLACE_ALL",
                         offset=0,
-                        speech_text=None,
+                        speech_text=speech_text,
                     )
             return build_alexa_stop_response()
 
-        # Previous Track ("Alexa, previous") - CRITICAL: No outputSpeech allowed by Alexa AudioPlayer!
+        # Previous Track ("Alexa, previous") - Announces song name as requested by user
         if intent_name in ("AMAZON.PreviousIntent", "AMAZON.StartOverIntent"):
             if q and q.get("tracks"):
                 if q["current_index"] > 0:
@@ -1031,6 +1161,7 @@ async def alexa_webhook(request: Request):
                     q["current_offset"] = 0
                     prev_song = q["tracks"][q["current_index"]]
                     logger.info(f"User skipped to previous track: {prev_song['title']} (index {q['current_index']})")
+                    speech_text = f"Playing {prev_song['title']} on YouTube Music."
                     return build_alexa_play_response(
                         video_id=prev_song["videoId"],
                         title=prev_song["title"],
@@ -1038,11 +1169,12 @@ async def alexa_webhook(request: Request):
                         base_url=base_url,
                         play_behavior="REPLACE_ALL",
                         offset=0,
-                        speech_text=None,
+                        speech_text=speech_text,
                     )
                 else:
                     curr_song = q["tracks"][0]
                     q["current_offset"] = 0
+                    speech_text = f"Playing {curr_song['title']} on YouTube Music."
                     return build_alexa_play_response(
                         video_id=curr_song["videoId"],
                         title=curr_song["title"],
@@ -1050,7 +1182,7 @@ async def alexa_webhook(request: Request):
                         base_url=base_url,
                         play_behavior="REPLACE_ALL",
                         offset=0,
-                        speech_text=None,
+                        speech_text=speech_text,
                     )
             return build_alexa_stop_response()
 
