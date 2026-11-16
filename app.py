@@ -30,8 +30,8 @@ INVIDIOUS_INSTANCES = [
     "https://invidious.perennialte.ch",
 ]
 
-# In-memory stream cache: video_id -> direct stream url
-stream_cache: Dict[str, str] = {}
+# In-memory stream cache: video_id -> {"url": str, "expires_at": float}
+stream_cache: Dict[str, Any] = {}
 
 # User playback state & queues: user_id -> {
 #    "tracks": List[Dict[str, str]],
@@ -42,8 +42,8 @@ stream_cache: Dict[str, str] = {}
 # }
 user_queues: Dict[str, Dict[str, Any]] = {}
 
-# Cached user liked songs library: user_id -> List[Dict[str, str]]
-user_liked_cache: Dict[str, List[Dict[str, str]]] = {}
+# Cached user liked songs library: user_id -> {"tracks": List[Dict[str, str]], "cached_at": float}
+user_liked_cache: Dict[str, Dict[str, Any]] = {}
 
 # Rolling event buffer for live state diagnostics and monitoring
 recent_events: List[Dict[str, Any]] = []
@@ -228,9 +228,15 @@ def extract_with_ytdlp(video_id: str) -> Optional[str]:
 
 
 async def resolve_audio_stream(video_id: str) -> Optional[str]:
-    """Extracts direct audio stream URL for video_id with cache, parallel racing failover, and yt-dlp backup."""
+    """Extracts direct audio stream URL for video_id with TTL-aware cache, parallel racing failover, and yt-dlp backup."""
+    now = time.time()
     if video_id in stream_cache:
-        return stream_cache[video_id]
+        entry = stream_cache[video_id]
+        if isinstance(entry, dict):
+            if now < entry.get("expires_at", 0):
+                return entry.get("url")
+        elif isinstance(entry, str):
+            return entry
 
     data = await fetch_with_failover(f"/api/v1/videos/{video_id}")
     if data and isinstance(data, dict):
@@ -257,7 +263,7 @@ async def resolve_audio_stream(video_id: str) -> Optional[str]:
                     break
 
         if best_url:
-            stream_cache[video_id] = best_url
+            stream_cache[video_id] = {"url": best_url, "expires_at": time.time() + 14400}
             return best_url
 
     # Fallback to native yt-dlp engine if Invidious instances are throttled or fail
@@ -265,7 +271,7 @@ async def resolve_audio_stream(video_id: str) -> Optional[str]:
         logger.info(f"Resolving {video_id} via native yt-dlp engine...")
         direct_url = await asyncio.to_thread(extract_with_ytdlp, video_id)
         if direct_url:
-            stream_cache[video_id] = direct_url
+            stream_cache[video_id] = {"url": direct_url, "expires_at": time.time() + 14400}
             return direct_url
 
     return None
@@ -273,10 +279,17 @@ async def resolve_audio_stream(video_id: str) -> Optional[str]:
 
 def prewarm_tracks(tracks: List[Dict[str, str]], count: int = 2):
     """Spawns background tasks to pre-resolve stream URLs so playback starts instantly."""
+    now = time.time()
     for track in tracks[:count]:
         vid = track.get("videoId")
-        if vid and vid not in stream_cache:
-            asyncio.create_task(resolve_audio_stream(vid))
+        if vid:
+            entry = stream_cache.get(vid)
+            is_valid = entry and (
+                (isinstance(entry, dict) and now < entry.get("expires_at", 0))
+                or isinstance(entry, str)
+            )
+            if not is_valid:
+                asyncio.create_task(resolve_audio_stream(vid))
 
 
 # ==============================================================================
@@ -319,12 +332,21 @@ def match_playlist_score(target: str, candidate_title: str) -> float:
     return max(ratio, avg_token)
 
 
-async def get_user_liked_songs(user_id: str, access_token: str) -> List[Dict[str, str]]:
-    """Fetches user's authentic YouTube Music Liked Songs with intelligent multi-tier discovery and caching."""
-    # Use cached library if available
-    if user_id in user_liked_cache and len(user_liked_cache[user_id]) >= 10:
-        logger.info(f"Using cached liked songs for {user_id[:10]} ({len(user_liked_cache[user_id])} tracks)")
-        return user_liked_cache[user_id]
+async def get_user_liked_songs(user_id: str, access_token: str, force_refresh: bool = False) -> List[Dict[str, str]]:
+    """Fetches user's authentic YouTube Music Liked Songs with intelligent multi-tier discovery and auto-expiring 15-minute cache."""
+    now = time.time()
+    # 1. Use cached library if available, unexpired (<15 mins), and not forced to refresh
+    if not force_refresh and user_id in user_liked_cache:
+        cache_entry = user_liked_cache[user_id]
+        if isinstance(cache_entry, dict):
+            cached_at = cache_entry.get("cached_at", 0)
+            cached_tracks = cache_entry.get("tracks", [])
+            # 15 minutes TTL (900 seconds)
+            if (now - cached_at < 900) and len(cached_tracks) >= 10:
+                logger.info(f"Using fresh cached liked songs for {user_id[:10]} (cache age: {int(now - cached_at)}s, {len(cached_tracks)} tracks)")
+                return cached_tracks
+        elif isinstance(cache_entry, list) and len(cache_entry) >= 10:
+            return cache_entry
 
     headers = {"Authorization": f"Bearer {access_token}"}
     tracks: List[Dict[str, str]] = []
@@ -354,7 +376,7 @@ async def get_user_liked_songs(user_id: str, access_token: str) -> List[Dict[str
                                         "author": snip.get("videoOwnerChannelTitle", "YouTube Music"),
                                     })
                         if tracks:
-                            user_liked_cache[user_id] = tracks
+                            user_liked_cache[user_id] = {"tracks": tracks, "cached_at": time.time()}
                             logger.info(f"Found {len(tracks)} liked songs from user playlist '{title}'")
                             return tracks
     except Exception as e:
@@ -409,7 +431,7 @@ async def get_user_liked_songs(user_id: str, access_token: str) -> List[Dict[str
                     break
 
             if tracks:
-                user_liked_cache[user_id] = tracks
+                user_liked_cache[user_id] = {"tracks": tracks, "cached_at": time.time()}
                 logger.info(f"Retrieved {len(tracks)} authentic YouTube Music liked tracks from LL/LM")
                 return tracks
     except Exception as e:
@@ -440,11 +462,16 @@ async def get_user_liked_songs(user_id: str, access_token: str) -> List[Dict[str
                                     "author": snip.get("videoOwnerChannelTitle", "YouTube Music"),
                                 })
                     if tracks:
-                        user_liked_cache[user_id] = tracks
+                        user_liked_cache[user_id] = {"tracks": tracks, "cached_at": time.time()}
                         logger.info(f"Using {len(tracks)} songs from personal playlist '{fb_title}' as music library fallback")
                         return tracks
     except Exception as e:
         logger.debug(f"Tier 3 fallback note: {e}")
+
+    # Fallback to existing cached library if fresh fetch encountered errors
+    if user_id in user_liked_cache and isinstance(user_liked_cache[user_id], dict) and user_liked_cache[user_id].get("tracks"):
+        logger.warning("Fetch encountered errors, retaining existing cached liked songs.")
+        return user_liked_cache[user_id]["tracks"]
 
     return tracks
 
@@ -710,14 +737,15 @@ async def handle_liked_songs_request(
     base_url: str,
     is_shuffle: bool = False,
     is_repeat: bool = False,
+    force_refresh: bool = False,
 ) -> Dict[str, Any]:
-    """Handles playing user liked songs from LM playlist with multi-track queueing."""
+    """Handles playing user liked songs from LM playlist with multi-track queueing and TTL-aware caching."""
     if not access_token:
         return build_alexa_link_account_response(
             "Apne liked gaane sunne ke liye, please link your Google account using the card sent to your Alexa app."
         )
 
-    liked_tracks = await get_user_liked_songs(user_id, access_token)
+    liked_tracks = await get_user_liked_songs(user_id, access_token, force_refresh=force_refresh)
     if not liked_tracks:
         return build_alexa_speech_response("No liked songs found in your YouTube Music library.")
 
@@ -763,7 +791,8 @@ async def handle_playlist_request(
     # 1. Did the user ask for Liked Songs via a playlist phrase?
     if any(w in p_low for w in ["liked", "favorites", "pasandida"]):
         logger.info(f"Playlist request '{playlist_name}' redirected to Liked Songs")
-        return await handle_liked_songs_request(user_id, access_token, base_url, is_shuffle, is_repeat)
+        force_refresh = any(w in p_low for w in ["refresh", "latest", "new", "naya", "naye", "update"])
+        return await handle_liked_songs_request(user_id, access_token, base_url, is_shuffle, is_repeat, force_refresh=force_refresh)
 
     # 2. Check user personal playlists first if authenticated
     if access_token:
@@ -842,7 +871,7 @@ async def health_check():
     return {
         "status": "online",
         "service": "Alexa YouTube Music Bridge",
-        "version": "3.2.0",
+        "version": "3.2.2",
         "features": [
             "Self-Pinging Keep-Alive Heartbeat (Zero Cold Starts)",
             "Parallel Racing Audio Resolution (<1.5s vs 25s)",
@@ -853,6 +882,8 @@ async def health_check():
             "Multi-Track Gapless Queueing",
             "Reliable Next & Previous Skipping (with Song Title Announcements)",
             "Smart Music Heuristics for Liked Library",
+            "Auto-Expiring 15-Minute Liked Songs Cache (with Voice Force-Refresh)",
+            "4-Hour Audio Stream Cache with Auto-Renewal",
             "Strict Playlist Hierarchy",
             "Shuffle & Repeat Support",
             "Auto-Recovery on Playback Failure",
@@ -866,10 +897,19 @@ async def health_check():
 @app.get("/debug/state")
 async def debug_state():
     """Live diagnostic endpoint to inspect active user queues, recent requests, and current playing tracks."""
+    now = time.time()
     return {
-        "version": "3.2.0",
+        "version": "3.2.2",
         "cached_streams_count": len(stream_cache),
         "cached_streams": list(stream_cache.keys()),
+        "user_liked_cache": {
+            u: {
+                "tracks_count": len(d.get("tracks", [])) if isinstance(d, dict) else len(d),
+                "cached_at": d.get("cached_at") if isinstance(d, dict) else None,
+                "age_seconds": int(now - d.get("cached_at", 0)) if isinstance(d, dict) else None,
+            }
+            for u, d in user_liked_cache.items()
+        },
         "user_queues": {
             u: {
                 "tracks_count": len(d.get("tracks", [])),
@@ -984,7 +1024,8 @@ async def alexa_webhook(request: Request):
             req_text = str(body).lower()
             is_shuffle = "shuffle" in req_text or (q.get("shuffle") if q else False)
             is_repeat = "repeat" in req_text or "loop" in req_text or (q.get("repeat") if q else False)
-            return await handle_liked_songs_request(user_id, access_token, base_url, is_shuffle, is_repeat)
+            force_refresh = any(w in req_text for w in ["refresh", "latest", "new", "naya", "naye", "update"])
+            return await handle_liked_songs_request(user_id, access_token, base_url, is_shuffle, is_repeat, force_refresh=force_refresh)
 
         # Play Playlist ("play my punjabi playlist", "playlist lofi bajao", "aajkal punjabi playlist")
         if intent_name == "PlayPlaylistIntent":
@@ -1063,7 +1104,8 @@ async def alexa_webhook(request: Request):
 
             # 1. Did the user ask for liked songs via PlayMusicIntent?
             if any(w in q_low for w in ["liked", "favorites", "pasandida"]):
-                return await handle_liked_songs_request(user_id, access_token, base_url, is_shuffle, is_repeat)
+                force_refresh = any(w in req_text for w in ["refresh", "latest", "new", "naya", "naye", "update"])
+                return await handle_liked_songs_request(user_id, access_token, base_url, is_shuffle, is_repeat, force_refresh=force_refresh)
 
             # 2. Did the user ask for a playlist explicitly?
             if "playlist" in q_low or q_low.startswith("my ") or q_low.startswith("meri "):
